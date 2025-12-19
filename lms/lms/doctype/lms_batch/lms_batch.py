@@ -150,15 +150,22 @@ def create_live_class(
 	if not all([batch_name, zoom_account, title, duration, date, time, timezone]):
 		frappe.throw(_("Please provide all required fields."))
 	
-	# Validate date and time are not empty
-	if not date or not time or not date.strip() or not time.strip():
+	# Validate date and time are not empty - handle both string and date objects
+	try:
+		date_str = str(date).strip() if date else ""
+		time_str = str(time).strip() if time else ""
+	except:
+		date_str = ""
+		time_str = ""
+	
+	if not date_str or not time_str:
 		frappe.throw(_("Date and time are required."))
 	
 	try:
 		# Zoom API payload
 		zoom_payload = {
 			"topic": title,
-			"start_time": format_datetime(f"{date} {time}", "yyyy-MM-ddTHH:mm:ssZ"),
+			"start_time": format_datetime(f"{date_str} {time_str}", "yyyy-MM-ddTHH:mm:ssZ"),
 			"duration": int(duration),
 			"agenda": description or "",
 			"private_meeting": True,
@@ -195,8 +202,8 @@ def create_live_class(
 				"uuid": data.get("uuid", ""),
 				"title": title,
 				"host": frappe.session.user,
-				"date": date,
-				"time": time,
+				"date": date_str,  # Use converted string
+				"time": time_str,   # Use converted string
 				"timezone": timezone,
 				"batch_name": batch_name,
 				"password": data.get("password", ""),
