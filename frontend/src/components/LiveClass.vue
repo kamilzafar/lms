@@ -1,217 +1,240 @@
 <template>
-	<div
-		v-if="hasPermission() && !props.zoomAccount"
-		class="flex items-center space-x-2 mb-5 bg-surface-amber-1 py-1 px-2 rounded-md text-ink-amber-3 text-xs"
+	<Dialog
+		v-model="show"
+		:options="{
+			title: __('Create a Live Class'),
+			size: 'xl',
+			actions: [
+				{
+					label: 'Submit',
+					variant: 'solid',
+					onClick: ({ close }) => submitLiveClass(close),
+				},
+			],
+		}"
 	>
-		<AlertCircle class="size-4 stroke-1.5" />
-		<span>
-			{{ __('Please add a zoom account to the batch to create live classes.') }}
-		</span>
-	</div>
-
-	<div class="flex items-center justify-between">
-		<div class="text-lg font-semibold text-ink-gray-9">
-			{{ __('Live Class') }}
-		</div>
-		<Button v-if="canCreateClass()" @click="openLiveClassModal">
-			<template #prefix>
-				<Plus class="h-4 w-4" />
-			</template>
-			<span>
-				{{ __('Add') }}
-			</span>
-		</Button>
-	</div>
-	<div
-		v-if="liveClasses.data?.length"
-		class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-5"
-	>
-		<div
-			v-for="cls in liveClasses.data"
-			class="flex flex-col border rounded-md h-full text-ink-gray-7 hover:border-outline-gray-3 p-3"
-			:class="{
-				'cursor-pointer': hasPermission() && cls.attendees > 0,
-			}"
-			@click="
-				() => {
-					openAttendanceModal(cls)
-				}
-			"
-		>
-			<div class="font-semibold text-ink-gray-9 text-lg mb-1">
-				{{ cls.title }}
-			</div>
-			<div class="short-introduction">
-				{{ cls.description }}
-			</div>
-			<div class="mt-auto space-y-3">
-				<div class="flex items-center space-x-2">
-					<Calendar class="w-4 h-4 stroke-1.5" />
-					<span>
-						{{ dayjs(cls.date).format('DD MMMM YYYY') }}
-					</span>
-				</div>
-				<div class="flex items-center space-x-2">
-					<Clock class="w-4 h-4 stroke-1.5" />
-					<span>
-						{{ dayjs(getClassStart(cls)).format('hh:mm A') }} -
-						{{ dayjs(getClassEnd(cls)).format('hh:mm A') }}
-					</span>
-				</div>
-				<div
-					v-if="canAccessClass(cls)"
-					class="flex items-center space-x-2 text-ink-gray-9 mt-auto"
-				>
-					<a
-						v-if="user.data?.is_moderator || user.data?.is_evaluator"
-						:href="cls.start_url"
-						target="_blank"
-						class="cursor-pointer inline-flex items-center justify-center gap-2 transition-colors focus:outline-none text-ink-gray-8 bg-surface-gray-2 hover:bg-surface-gray-3 active:bg-surface-gray-4 focus-visible:ring focus-visible:ring-outline-gray-3 h-7 text-base px-2 rounded"
-						:class="cls.join_url ? 'w-full' : 'w-1/2'"
-					>
-						<Monitor class="h-4 w-4 stroke-1.5" />
-						{{ __('Start') }}
-					</a>
-					<a
-						:href="cls.join_url"
-						target="_blank"
-						class="w-full cursor-pointer inline-flex items-center justify-center gap-2 transition-colors focus:outline-none text-ink-gray-8 bg-surface-gray-2 hover:bg-surface-gray-3 active:bg-surface-gray-4 focus-visible:ring focus-visible:ring-outline-gray-3 h-7 text-base px-2 rounded"
-					>
-						<Video class="h-4 w-4 stroke-1.5" />
-						{{ __('Join') }}
-					</a>
-				</div>
-				<Tooltip
-					v-else-if="hasClassEnded(cls)"
-					:text="__('This class has ended')"
-					placement="right"
-				>
-					<div class="flex items-center space-x-2 text-ink-amber-3 w-fit">
-						<Info class="w-4 h-4 stroke-1.5" />
-						<span>
-							{{ __('Ended') }}
-						</span>
+		<template #body-content>
+			<div class="flex flex-col gap-4">
+				<div class="grid grid-cols-2 gap-4">
+					<div class="space-y-4">
+						<FormControl
+							type="text"
+							v-model="liveClass.title"
+							:label="__('Title')"
+							:required="true"
+						/>
+						<FormControl
+							v-model="liveClass.date"
+							type="date"
+							:label="__('Date')"
+							:required="true"
+						/>
+						<Tooltip :text="__('Duration of the live class in minutes')">
+							<FormControl
+								type="number"
+								v-model="liveClass.duration"
+								:label="__('Duration')"
+								:required="true"
+							/>
+						</Tooltip>
 					</div>
-				</Tooltip>
+					<div class="space-y-4">
+						<Tooltip
+							:text="
+								__(
+									'Time must be in 24 hour format (HH:mm). Example 11:30 or 22:00'
+								)
+							"
+						>
+							<FormControl
+								v-model="liveClass.time"
+								type="time"
+								:label="__('Time')"
+								:required="true"
+							/>
+						</Tooltip>
+
+						<div class="space-y-1.5">
+							<label class="block text-ink-gray-5 text-xs" for="batchTimezone">
+								{{ __('Timezone') }}
+								<span class="text-ink-red-3">*</span>
+							</label>
+							<Autocomplete
+								@update:modelValue="(opt) => (liveClass.timezone = opt.value)"
+								:modelValue="liveClass.timezone"
+								:options="getTimezoneOptions()"
+								:required="true"
+							/>
+						</div>
+						<FormControl
+							v-model="liveClass.auto_recording"
+							type="select"
+							:options="getRecordingOptions()"
+							:label="__('Auto Recording')"
+						/>
+					</div>
+				</div>
+				<FormControl
+					v-model="liveClass.description"
+					type="textarea"
+					:label="__('Description')"
+				/>
 			</div>
-		</div>
-	</div>
-	<div v-else class="text-sm italic text-ink-gray-5 mt-2">
-		{{ __('No live classes scheduled') }}
-	</div>
-
-	<LiveClassModal
-		:batch="props.batch"
-		:zoomAccount="props.zoomAccount"
-		v-model="showLiveClassModal"
-		v-model:reloadLiveClasses="liveClasses"
-	/>
-
-	<LiveClassAttendance v-model="showAttendance" :live_class="attendanceFor" />
+		</template>
+	</Dialog>
 </template>
 <script setup>
-import { createListResource, Button, Tooltip } from 'frappe-ui'
 import {
-	Plus,
-	Clock,
-	Calendar,
-	Video,
-	Monitor,
-	Info,
-	AlertCircle,
-} from 'lucide-vue-next'
-import { inject, ref } from 'vue'
-import { formatTime } from '@/utils/'
-import LiveClassModal from '@/components/Modals/LiveClassModal.vue'
-import LiveClassAttendance from '@/components/Modals/LiveClassAttendance.vue'
+	Dialog,
+	createResource,
+	Tooltip,
+	FormControl,
+	Autocomplete,
+	toast,
+} from 'frappe-ui'
+import { reactive, inject, onMounted } from 'vue'
+import { getTimezones, getUserTimezone } from '@/utils/'
 
+const liveClasses = defineModel('reloadLiveClasses')
+const show = defineModel()
 const user = inject('$user')
-const showLiveClassModal = ref(false)
 const dayjs = inject('$dayjs')
-const readOnlyMode = window.read_only_mode
-const showAttendance = ref(false)
-const attendanceFor = ref(null)
 
 const props = defineProps({
 	batch: {
 		type: String,
 		required: true,
 	},
-	zoomAccount: String,
-})
-
-const liveClasses = createListResource({
-	doctype: 'LMS Live Class',
-	filters: {
-		batch_name: props.batch,
+	zoomAccount: {
+		type: String,
+		required: true,
 	},
-	fields: [
-		'title',
-		'description',
-		'time',
-		'date',
-		'duration',
-		'attendees',
-		'start_url',
-		'join_url',
-		'owner',
-	],
-	orderBy: 'date',
-	auto: true,
 })
 
-const openLiveClassModal = () => {
-	showLiveClassModal.value = true
+let liveClass = reactive({
+	title: '',
+	description: '',
+	date: '',
+	time: '',
+	duration: '',
+	timezone: '',
+	auto_recording: 'No Recording',
+	batch: props.batch,
+	host: user.data.name,
+})
+
+onMounted(() => {
+	liveClass.timezone = getUserTimezone()
+})
+
+const getTimezoneOptions = () => {
+	return getTimezones().map((timezone) => {
+		return {
+			label: timezone,
+			value: timezone,
+		}
+	})
 }
 
-const canCreateClass = () => {
-	if (readOnlyMode) return false
-	if (!props.zoomAccount) return false
-	return hasPermission()
+const getRecordingOptions = () => {
+	return [
+		{
+			label: 'No Recording',
+			value: 'No Recording',
+		},
+		{
+			label: 'Local',
+			value: 'Local',
+		},
+		{
+			label: 'Cloud',
+			value: 'Cloud',
+		},
+	]
 }
 
-const hasPermission = () => {
-	return user.data?.is_moderator || user.data?.is_evaluator
+const createLiveClass = createResource({
+	url: 'lms.lms.doctype.lms_batch.lms_batch.create_live_class',
+	makeParams(values) {
+		return {
+			doctype: 'LMS Live Class',
+			batch_name: values.batch,
+			zoom_account: props.zoomAccount,
+			...values,
+		}
+	},
+})
+
+const submitLiveClass = (close) => {
+	return createLiveClass.submit(liveClass, {
+		validate() {
+			validateFormFields()
+		},
+		onSuccess() {
+			liveClasses.value.reload()
+			refreshForm()
+			close()
+		},
+		onError(err) {
+			toast.error(err.messages?.[0] || err)
+		},
+	})
 }
 
-const canAccessClass = (cls) => {
-	if (cls.date < dayjs().format('YYYY-MM-DD')) return false
-	if (cls.date > dayjs().format('YYYY-MM-DD')) return false
-	if (hasClassEnded(cls)) return false
+const validateFormFields = () => {
+	if (!liveClass.title) {
+		return __('Please enter a title.')
+	}
+	if (!liveClass.date) {
+		return __('Please select a date.')
+	}
+	if (!liveClass.time) {
+		return __('Please select a time.')
+	}
+	if (!liveClass.timezone) {
+		return __('Please select a timezone.')
+	}
+	if (!valideTime()) {
+		return __('Please enter a valid time in the format HH:mm.')
+	}
+	const liveClassDateTime = dayjs(`${liveClass.date}T${liveClass.time}`).tz(
+		liveClass.timezone,
+		true
+	)
+	if (
+		liveClassDateTime.isSameOrBefore(
+			dayjs().tz(liveClass.timezone, false),
+			'minute'
+		)
+	) {
+		return __('Please select a future date and time.')
+	}
+	if (!liveClass.duration) {
+		return __('Please select a duration.')
+	}
+}
+
+const valideTime = () => {
+	let time = liveClass.time.split(':')
+	if (time.length != 2) {
+		return false
+	}
+	if (time[0] < 0 || time[0] > 23) {
+		return false
+	}
+	if (time[1] < 0 || time[1] > 59) {
+		return false
+	}
 	return true
 }
 
-const getClassStart = (cls) => {
-	return new Date(`${cls.date}T${cls.time}`)
-}
-
-const getClassEnd = (cls) => {
-	const classStart = getClassStart(cls)
-	return new Date(classStart.getTime() + cls.duration * 60000)
-}
-
-const hasClassEnded = (cls) => {
-	const classEnd = getClassEnd(cls)
-	const now = new Date()
-	return now > classEnd
-}
-
-const openAttendanceModal = (cls) => {
-	if (!hasPermission()) return
-	if (cls.attendees <= 0) return
-	showAttendance.value = true
-	attendanceFor.value = cls
+const refreshForm = () => {
+	liveClass.title = ''
+	liveClass.description = ''
+	liveClass.date = ''
+	liveClass.time = ''
+	liveClass.duration = ''
+	liveClass.timezone = getUserTimezone()
+	liveClass.auto_recording = 'No Recording'
 }
 </script>
-<style>
-.short-introduction {
-	display: -webkit-box;
-	-webkit-line-clamp: 2;
-	-webkit-box-orient: vertical;
-	text-overflow: ellipsis;
-	width: 100%;
-	overflow: hidden;
-	margin: 0.25rem 0 1.5rem;
-	line-height: 1.5;
-}
-</style>
