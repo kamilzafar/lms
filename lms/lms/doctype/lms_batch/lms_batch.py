@@ -146,48 +146,83 @@ def create_live_class(
 	auto_recording,
 	description=None,
 ):
-	payload = {
-		"topic": title,
-		"start_time": format_datetime(f"{date} {time}", "yyyy-MM-ddTHH:mm:ssZ"),
-		"duration": duration,
-		"agenda": description,
-		"private_meeting": True,
-		"auto_recording": "none" if auto_recording == "No Recording" else auto_recording.lower(),
-		"timezone": timezone,
-	}
-	headers = {
-		"Authorization": "Bearer " + authenticate(zoom_account),
-		"content-type": "application/json",
-	}
-	response = requests.post(
-		"https://api.zoom.us/v2/users/me/meetings", headers=headers, data=json.dumps(payload)
-	)
+	# Validate required fields
+	if not all([batch_name, zoom_account, title, duration, date, time, timezone]):
+		frappe.throw(_("Please provide all required fields."))
+	
+	# Validate date and time are not empty
+	if not date or not time or not date.strip() or not time.strip():
+		frappe.throw(_("Date and time are required."))
+	
+	try:
+		# Zoom API payload
+		zoom_payload = {
+			"topic": title,
+			"start_time": format_datetime(f"{date} {time}", "yyyy-MM-ddTHH:mm:ssZ"),
+			"duration": int(duration),
+			"agenda": description or "",
+			"private_meeting": True,
+			"auto_recording": "none" if auto_recording == "No Recording" else auto_recording.lower(),
+			"timezone": timezone,
+		}
+		headers = {
+			"Authorization": "Bearer " + authenticate(zoom_account),
+			"content-type": "application/json",
+		}
+		response = requests.post(
+			"https://api.zoom.us/v2/users/me/meetings", 
+			headers=headers, 
+			data=json.dumps(zoom_payload),
+			timeout=30
+		)
 
-	if response.status_code == 201:
-		data = json.loads(response.text)
-		payload.update(
-			{
+		if response.status_code == 201:
+			try:
+				data = json.loads(response.text)
+			except json.JSONDecodeError:
+				frappe.throw(_("Invalid response from Zoom API. Please try again."))
+			
+			# Validate required fields from Zoom response
+			if not data.get("id") or not data.get("join_url"):
+				frappe.throw(_("Incomplete response from Zoom API. Please try again."))
+			
+			# Create a separate payload for the doctype (don't reuse zoom_payload)
+			class_payload = {
 				"doctype": "LMS Live Class",
-				"start_url": data.get("start_url"),
-				"join_url": data.get("join_url"),
-				"meeting_id": data.get("id"),
-				"uuid": data.get("uuid"),
+				"start_url": data.get("start_url", ""),
+				"join_url": data.get("join_url", ""),
+				"meeting_id": str(data.get("id", "")),
+				"uuid": data.get("uuid", ""),
 				"title": title,
 				"host": frappe.session.user,
 				"date": date,
 				"time": time,
+				"timezone": timezone,
 				"batch_name": batch_name,
-				"password": data.get("password"),
-				"description": description,
+				"password": data.get("password", ""),
+				"description": description or "",
 				"auto_recording": auto_recording,
 				"zoom_account": zoom_account,
 			}
-		)
-		class_details = frappe.get_doc(payload)
-		class_details.save()
-		return class_details
-	else:
-		frappe.throw(_("Error creating live class. Please try again. {0}").format(response.text))
+			class_details = frappe.get_doc(class_payload)
+			class_details.save()
+			return class_details
+		else:
+			error_msg = "Unknown error"
+			try:
+				error_data = response.json()
+				error_msg = error_data.get("message", str(response.text))
+			except:
+				error_msg = response.text[:200] if response.text else "Unknown error"
+			frappe.throw(_("Error creating live class. Please try again. {0}").format(error_msg))
+	except ValueError as e:
+		# Handle date/time parsing errors
+		frappe.throw(_("Invalid date or time format. Please check your inputs."))
+	except requests.exceptions.RequestException as e:
+		frappe.throw(_("Network error while connecting to Zoom API: {0}").format(str(e)))
+	except Exception as e:
+		frappe.log_error(f"Error in create_live_class: {str(e)}")
+		frappe.throw(_("An unexpected error occurred. Please try again."))
 
 
 def authenticate(zoom_account):

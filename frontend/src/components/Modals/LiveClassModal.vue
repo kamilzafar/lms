@@ -60,8 +60,10 @@
 								<span class="text-ink-red-3">*</span>
 							</label>
 							<Autocomplete
-								@update:modelValue="(opt) => (liveClass.timezone = opt.value)"
-								:modelValue="liveClass.timezone"
+								:modelValue="liveClass.timezone || ''"
+								@update:modelValue="(value) => { 
+									liveClass.timezone = typeof value === 'object' && value !== null ? (value?.value || value) : (value || 'UTC')
+								}"
 								:options="getTimezoneOptions()"
 								:required="true"
 							/>
@@ -124,7 +126,8 @@ let liveClass = reactive({
 })
 
 onMounted(() => {
-	liveClass.timezone = getUserTimezone()
+	const userTimezone = getUserTimezone()
+	liveClass.timezone = userTimezone || 'UTC'  // Fallback to UTC if null
 })
 
 const getTimezoneOptions = () => {
@@ -156,11 +159,12 @@ const getRecordingOptions = () => {
 const createLiveClass = createResource({
 	url: 'lms.lms.doctype.lms_batch.lms_batch.create_live_class',
 	makeParams(values) {
+		// Remove doctype from params - it's not needed
+		const { doctype, ...rest } = values
 		return {
-			doctype: 'LMS Live Class',
-			batch_name: values.batch,
+			batch_name: rest.batch,
 			zoom_account: props.zoomAccount,
-			...values,
+			...rest,
 		}
 	},
 })
@@ -182,47 +186,65 @@ const submitLiveClass = (close) => {
 }
 
 const validateFormFields = () => {
-	if (!liveClass.title) {
+	if (!liveClass.title || !liveClass.title.trim()) {
 		return __('Please enter a title.')
 	}
-	if (!liveClass.date) {
+	if (!liveClass.date || !liveClass.date.trim()) {
 		return __('Please select a date.')
 	}
-	if (!liveClass.time) {
+	if (!liveClass.time || !liveClass.time.trim()) {
 		return __('Please select a time.')
 	}
-	if (!liveClass.timezone) {
+	if (!liveClass.timezone || !liveClass.timezone.trim()) {
 		return __('Please select a timezone.')
 	}
 	if (!valideTime()) {
 		return __('Please enter a valid time in the format HH:mm.')
 	}
-	const liveClassDateTime = dayjs(`${liveClass.date}T${liveClass.time}`).tz(
-		liveClass.timezone,
-		true
-	)
-	if (
-		liveClassDateTime.isSameOrBefore(
-			dayjs().tz(liveClass.timezone, false),
-			'minute'
+	
+	try {
+		const liveClassDateTime = dayjs(`${liveClass.date}T${liveClass.time}`).tz(
+			liveClass.timezone,
+			true
 		)
-	) {
-		return __('Please select a future date and time.')
+		if (!liveClassDateTime.isValid()) {
+			return __('Invalid date or time. Please check your inputs.')
+		}
+		if (
+			liveClassDateTime.isSameOrBefore(
+				dayjs().tz(liveClass.timezone, false),
+				'minute'
+			)
+		) {
+			return __('Please select a future date and time.')
+		}
+	} catch (error) {
+		return __('Error validating date/time. Please check your timezone selection.')
 	}
-	if (!liveClass.duration) {
-		return __('Please select a duration.')
+	
+	if (!liveClass.duration || liveClass.duration <= 0) {
+		return __('Please enter a valid duration (greater than 0).')
 	}
 }
 
 const valideTime = () => {
+	if (!liveClass.time) {
+		return false
+	}
 	let time = liveClass.time.split(':')
 	if (time.length != 2) {
 		return false
 	}
-	if (time[0] < 0 || time[0] > 23) {
+	const hours = parseInt(time[0], 10)
+	const minutes = parseInt(time[1], 10)
+	
+	if (isNaN(hours) || isNaN(minutes)) {
 		return false
 	}
-	if (time[1] < 0 || time[1] > 59) {
+	if (hours < 0 || hours > 23) {
+		return false
+	}
+	if (minutes < 0 || minutes > 59) {
 		return false
 	}
 	return true
@@ -234,7 +256,7 @@ const refreshForm = () => {
 	liveClass.date = ''
 	liveClass.time = ''
 	liveClass.duration = ''
-	liveClass.timezone = getUserTimezone()
+	liveClass.timezone = getUserTimezone() || 'UTC'  // Fallback to UTC
 	liveClass.auto_recording = 'No Recording'
 }
 </script>
