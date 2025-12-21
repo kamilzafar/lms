@@ -109,14 +109,21 @@
 						/>
 					</div>
 					<div class="space-y-5">
-						<FormControl
-							v-model="batch.timezone"
-							:label="__('Timezone')"
-							type="text"
-							:placeholder="__('Example: IST (+5:30)')"
-							class="mb-4"
-							:required="true"
-						/>
+						<div class="space-y-1.5">
+							<label class="block text-ink-gray-5 text-xs" for="batchTimezone">
+								{{ __('Timezone') }}
+								<span class="text-ink-red-3">*</span>
+							</label>
+							<Autocomplete
+								:modelValue="batch.timezone || ''"
+								@update:modelValue="(value) => { 
+									batch.timezone = typeof value === 'object' && value !== null ? (value?.value || value) : (value || 'UTC')
+								}"
+								:options="getTimezoneOptions()"
+								:required="true"
+								class="mb-4"
+							/>
+						</div>
 						<FormControl
 							v-model="batch.evaluation_end_date"
 							:label="__('Evaluation End Date')"
@@ -331,6 +338,7 @@ import {
 	toast,
 	call,
 	Toast,
+	Autocomplete,
 } from 'frappe-ui'
 import { useRouter } from 'vue-router'
 import { Image, Trash2 } from 'lucide-vue-next'
@@ -346,6 +354,8 @@ import {
 	sanitizeHTML,
 	updateMetaInfo,
 	validateFile,
+	getTimezones,
+	getUserTimezone,
 } from '@/utils'
 
 const router = useRouter()
@@ -398,6 +408,9 @@ onMounted(() => {
 		fetchBatchInfo()
 	} else {
 		capture('batch_form_opened')
+		// Set default timezone for new batches
+		const userTimezone = getUserTimezone()
+		batch.timezone = userTimezone || 'UTC'
 	}
 	window.addEventListener('keydown', keyboardShortcut)
 })
@@ -609,6 +622,15 @@ const saveImage = (file) => {
 
 const removeImage = () => {
 	batch.image = null
+}
+
+const getTimezoneOptions = () => {
+	return getTimezones().map((timezone) => {
+		return {
+			label: timezone,
+			value: timezone,
+		}
+	})
 }
 
 const breadcrumbs = computed(() => {
