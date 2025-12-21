@@ -344,6 +344,7 @@ export function getTimezones() {
 		'Asia/Muscat',
 		'Asia/Baku',
 		'Asia/Kabul',
+		'Asia/Karachi',  // Pakistan Standard Time (PKT) UTC+5:00
 		'Asia/Yekaterinburg',
 		'Asia/Tashkent',
 		'Asia/Calcutta',
