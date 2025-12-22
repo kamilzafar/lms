@@ -165,25 +165,26 @@ def create_live_class(
 
 	if response.status_code == 201:
 		data = json.loads(response.text)
-		payload.update(
-			{
-				"doctype": "LMS Live Class",
-				"start_url": data.get("start_url"),
-				"join_url": data.get("join_url"),
-				"meeting_id": data.get("id"),
-				"uuid": data.get("uuid"),
-				"title": title,
-				"host": frappe.session.user,
-				"date": date,
-				"time": time,
-				"batch_name": batch_name,
-				"password": data.get("password"),
-				"description": description,
-				"auto_recording": auto_recording,
-				"zoom_account": zoom_account,
-			}
-		)
-		class_details = frappe.get_doc(payload)
+		# Create a clean dictionary for Frappe document (not reusing Zoom payload)
+		class_payload = {
+			"doctype": "LMS Live Class",
+			"start_url": data.get("start_url"),
+			"join_url": data.get("join_url"),
+			"meeting_id": data.get("id"),
+			"uuid": data.get("uuid"),
+			"title": title,
+			"host": frappe.session.user,
+			"date": date,
+			"time": time,
+			"duration": cint(duration),
+			"timezone": timezone,
+			"batch_name": batch_name,
+			"password": data.get("password"),
+			"description": description,
+			"auto_recording": auto_recording,
+			"zoom_account": zoom_account,
+		}
+		class_details = frappe.get_doc(class_payload)
 		class_details.save()
 		return class_details
 	else:
