@@ -160,7 +160,13 @@ const createLiveClass = createResource({
 			doctype: 'LMS Live Class',
 			batch_name: values.batch,
 			zoom_account: props.zoomAccount,
-			...values,
+			title: values.title,
+			duration: parseInt(values.duration),
+			date: values.date,
+			time: values.time,
+			timezone: values.timezone,
+			auto_recording: values.auto_recording,
+			description: values.description,
 		}
 	},
 })
