@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git log:*)",
+      "Bash(cat:*)",
+      "Bash(git checkout:*)",
+      "Bash(python:*)",
+      "Bash(npm run build)"
+    ]
+  }
+}
