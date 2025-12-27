@@ -145,6 +145,7 @@ def create_live_class(
 	timezone,
 	auto_recording,
 	description=None,
+	lesson=None,
 ):
 	payload = {
 		"topic": title,
@@ -179,6 +180,7 @@ def create_live_class(
 			"duration": cint(duration),
 			"timezone": timezone,
 			"batch_name": batch_name,
+			"lesson": lesson,
 			"password": data.get("password"),
 			"description": description,
 			"auto_recording": auto_recording,

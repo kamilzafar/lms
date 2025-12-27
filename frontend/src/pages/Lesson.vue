@@ -243,6 +243,16 @@
 						>
 							<LessonContent :content="lesson.data.instructor_notes" />
 						</div>
+
+						<!-- Zoom Recording Player -->
+						<ZoomRecordingPlayer
+							v-if="lesson.data.has_recording"
+							:liveClassName="lesson.data.live_class_name"
+							:recordingDuration="lesson.data.recording_duration"
+							:hasRecording="lesson.data.has_recording"
+							class="px-5 mt-6"
+						/>
+
 						<div
 							v-if="lesson.data.content"
 							@mouseup="toggleInlineMenu"
@@ -377,6 +387,7 @@ import CourseOutline from '@/components/CourseOutline.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import Notes from '@/components/Notes/Notes.vue'
 import InlineLessonMenu from '@/components/Notes/InlineLessonMenu.vue'
+import ZoomRecordingPlayer from '@/components/ZoomRecordingPlayer.vue'
 
 const user = inject('$user')
 const socket = inject('$socket')

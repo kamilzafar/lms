@@ -11,6 +11,7 @@
   "host",
   "zoom_account",
   "batch_name",
+  "lesson",
   "column_break_astv",
   "date",
   "time",
@@ -33,9 +34,12 @@
   "join_url",
   "section_break_recording",
   "recording_processed",
-  "recording_file",
+  "zoom_recording_id",
+  "recording_passcode",
   "column_break_recording",
-  "recording_url"
+  "recording_url",
+  "recording_duration",
+  "recording_file_size"
  ],
  "fields": [
   {
@@ -128,6 +132,13 @@
    "options": "LMS Batch"
   },
   {
+   "description": "Link this live class to a specific course lesson for recording attachment",
+   "fieldname": "lesson",
+   "fieldtype": "Link",
+   "label": "Lesson",
+   "options": "Course Lesson"
+  },
+  {
    "default": "No Recording",
    "fieldname": "auto_recording",
    "fieldtype": "Select",
@@ -179,28 +190,45 @@
   },
   {
    "default": "0",
-   "description": "Whether the Zoom cloud recording has been downloaded and attached",
+   "description": "Whether the Zoom cloud recording metadata has been extracted",
    "fieldname": "recording_processed",
    "fieldtype": "Check",
    "label": "Recording Processed"
   },
   {
-   "description": "Reference to the uploaded recording file",
-   "fieldname": "recording_file",
-   "fieldtype": "Link",
-   "label": "Recording File",
-   "options": "File"
+   "description": "Zoom recording file ID for API retrieval",
+   "fieldname": "zoom_recording_id",
+   "fieldtype": "Data",
+   "label": "Zoom Recording ID"
+  },
+  {
+   "description": "Passcode for Zoom cloud recording access (encrypted)",
+   "fieldname": "recording_passcode",
+   "fieldtype": "Password",
+   "label": "Recording Passcode"
   },
   {
    "fieldname": "column_break_recording",
    "fieldtype": "Column Break"
   },
   {
-   "description": "File URL of the recording",
+   "description": "Zoom play_url (metadata only, fetched on-demand)",
    "fieldname": "recording_url",
    "fieldtype": "Data",
    "label": "Recording URL",
    "read_only": 1
+  },
+  {
+   "description": "Duration of the recording in seconds",
+   "fieldname": "recording_duration",
+   "fieldtype": "Int",
+   "label": "Recording Duration (seconds)"
+  },
+  {
+   "description": "Size of the recording file in bytes",
+   "fieldname": "recording_file_size",
+   "fieldtype": "Int",
+   "label": "Recording File Size (bytes)"
   }
  ],
  "grid_page_length": 50,

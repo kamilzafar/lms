@@ -167,20 +167,19 @@ def update_attendees_count(live_class, data):
 
 def process_zoom_recording(meeting_uuid, recording_files):
 	"""
-	Download Zoom recording and attach to corresponding lesson.
+	Extract Zoom recording metadata and store in LMS Live Class.
+	NO file downloads - metadata only (videos remain in Zoom Cloud).
 	Called as background job from webhook handler.
 
 	Args:
 		meeting_uuid: Zoom meeting UUID
 		recording_files: List of recording file objects from webhook payload
 	"""
-	from frappe.utils.file_manager import save_file
-
 	# 1. Find the LMS Live Class
 	live_class = frappe.db.get_value(
 		"LMS Live Class",
 		{"uuid": meeting_uuid},
-		["name", "batch_name", "auto_recording", "zoom_account"],
+		["name", "batch_name", "auto_recording", "zoom_account", "lesson", "meeting_id"],
 		as_dict=True
 	)
 
@@ -199,11 +198,11 @@ def process_zoom_recording(meeting_uuid, recording_files):
 		)
 		return
 
-	# 3. Check if already processed
+	# 3. Check if already processed (idempotent)
 	if frappe.db.get_value("LMS Live Class", live_class.name, "recording_processed"):
 		return  # Already processed, skip
 
-	# 4. Get the main video file
+	# 4. Get the main video file from webhook payload
 	video_file = None
 	for file in recording_files:
 		if file.get("file_type") == "MP4" and file.get("recording_type") in [
@@ -222,132 +221,101 @@ def process_zoom_recording(meeting_uuid, recording_files):
 		)
 		return
 
-	# 5. Get the lesson from the batch
-	batch = frappe.get_doc("LMS Batch", live_class.batch_name)
-	if not batch.courses:
-		frappe.log_error(
-			f"No courses found in batch {live_class.batch_name}",
-			"Zoom Recording Processing"
-		)
-		return
-
-	course_name = batch.courses[0].course
-	lesson = frappe.db.get_value("Course Lesson", {"title": live_class.name}, "name")
-
-	if not lesson:
-		frappe.log_error(
-			f"No lesson found with title matching {live_class.name}",
-			"Zoom Recording Processing"
-		)
-		return
-
-	# 6. Download recording from Zoom
-	download_url = video_file.get("download_url")
+	# 5. Fetch passcode from Zoom API (not in webhook payload)
+	# Must make separate API call to get recording_play_passcode
 	access_token = authenticate(live_class.zoom_account)
+	meeting_id = live_class.meeting_id
+
+	if not meeting_id:
+		frappe.log_error(
+			f"No meeting_id found for Live Class {live_class.name}",
+			"Zoom Recording Processing"
+		)
+		return
 
 	try:
-		response = requests.get(
-			download_url,
-			headers={"Authorization": f"Bearer {access_token}"},
-			stream=True,
-			timeout=300
-		)
+		# Fetch full recording details from Zoom API
+		zoom_api_url = f"https://api.zoom.us/v2/meetings/{meeting_id}/recordings"
+		headers = {"Authorization": f"Bearer {access_token}"}
+		response = requests.get(zoom_api_url, headers=headers, timeout=30)
 		response.raise_for_status()
 
-		# 7. Generate filename
-		lesson_doc = frappe.get_doc("Course Lesson", lesson)
-		course_doc = frappe.get_doc("LMS Course", course_name)
-		filename = f"{course_doc.name}_{lesson_doc.name}_recording.mp4"
+		recording_data = response.json()
+		recording_passcode = recording_data.get("recording_play_passcode", "")
 
-		# 8. Upload to Frappe File system
-		file_doc = save_file(
-			fname=filename,
-			content=response.content,
-			dt="Course Lesson",
-			dn=lesson,
-			is_private=1,
-			decode=False
-		)
+		# 6. Extract metadata from webhook payload (NO file download)
+		recording_id = video_file.get("id")
+		play_url = video_file.get("play_url")  # This URL expires (~24 hours)
+		file_size = video_file.get("file_size", 0)
 
-		# 9. Add video block to lesson content
-		add_video_block_to_lesson(lesson, file_doc.file_url)
+		# Calculate duration from recording_start/recording_end timestamps (milliseconds)
+		recording_start = video_file.get("recording_start")
+		recording_end = video_file.get("recording_end")
+		duration_seconds = 0
+		if recording_start and recording_end:
+			# Parse ISO 8601 timestamps
+			from datetime import datetime
+			start_dt = datetime.fromisoformat(recording_start.replace("Z", "+00:00"))
+			end_dt = datetime.fromisoformat(recording_end.replace("Z", "+00:00"))
+			duration_seconds = int((end_dt - start_dt).total_seconds())
 
-		# 10. Mark as processed
+		# 7. Store metadata ONLY (no file download, no file storage)
 		frappe.db.set_value(
 			"LMS Live Class",
 			live_class.name,
 			{
 				"recording_processed": 1,
-				"recording_file": file_doc.name,
-				"recording_url": file_doc.file_url
+				"zoom_recording_id": recording_id,
+				"recording_url": play_url,  # Store for reference (will be refreshed on-demand)
+				"recording_passcode": recording_passcode,
+				"recording_duration": duration_seconds,
+				"recording_file_size": file_size
 			}
 		)
 		frappe.db.commit()
 
-		# 11. Notify instructor
-		notify_instructor_recording_uploaded(live_class, lesson_doc, course_doc)
+		# 8. Notify instructor (metadata ready, not uploaded)
+		notify_instructor_recording_available(live_class)
 
+		print(f"✅ Zoom recording metadata stored for {live_class.name}")
+		print(f"   Recording ID: {recording_id}")
+		print(f"   Duration: {duration_seconds} seconds")
+		print(f"   File Size: {file_size} bytes")
+		print(f"   Passcode: {'Yes' if recording_passcode else 'No'}")
+
+	except requests.exceptions.HTTPError as e:
+		frappe.log_error(
+			f"Zoom API error fetching recording metadata for {live_class.name}: {str(e)}\nResponse: {e.response.text if e.response else 'N/A'}",
+			"Zoom Recording Processing"
+		)
 	except Exception as e:
 		frappe.log_error(
-			f"Error downloading recording for {live_class.name}: {str(e)}",
+			f"Error processing Zoom recording metadata for {live_class.name}: {str(e)}\n{frappe.get_traceback()}",
 			"Zoom Recording Processing"
 		)
 
 
-def add_video_block_to_lesson(lesson_name, file_url):
-	"""
-	Add an EditorJS upload block with the recording video to the lesson content.
-
-	Args:
-		lesson_name: Name of Course Lesson DocType
-		file_url: File URL of the uploaded recording
-	"""
-	lesson = frappe.get_doc("Course Lesson", lesson_name)
-
-	# Parse existing content
-	if lesson.content:
-		content_data = json.loads(lesson.content)
-	else:
-		content_data = {"blocks": []}
-
-	# Create video block
-	video_block = {
-		"type": "upload",
-		"data": {
-			"file_url": file_url,
-			"file_name": file_url.split("/")[-1],
-			"youtube": "",
-			"controls": True,
-			"title": "Class Recording"
-		}
-	}
-
-	# Add at the beginning of content
-	content_data["blocks"].insert(0, video_block)
-
-	# Update lesson
-	lesson.content = json.dumps(content_data)
-	lesson.save(ignore_permissions=True)
-	frappe.db.commit()
-
-
-def notify_instructor_recording_uploaded(live_class, lesson, course):
-	"""Send notification to instructor that recording is uploaded"""
+def notify_instructor_recording_available(live_class):
+	"""Send notification to instructor that recording metadata is available"""
 	from frappe.utils import get_fullname
 
 	instructor_name = get_fullname(live_class.get("host", frappe.session.user))
 
+	# Get lesson title if linked
+	lesson_title = "this live class"
+	if live_class.get("lesson"):
+		lesson_title = frappe.db.get_value("Course Lesson", live_class.lesson, "title") or lesson_title
+
 	notification = frappe.new_doc("Notification Log")
-	notification.subject = f"Recording uploaded for {lesson.title}"
+	notification.subject = f"Recording available for {lesson_title}"
 	notification.for_user = live_class.get("host", frappe.session.user)
 	notification.type = "Alert"
-	notification.document_type = "Course Lesson"
-	notification.document_name = lesson.name
+	notification.document_type = "LMS Live Class"
+	notification.document_name = live_class.name
 	notification.email_content = f"""
-		<p>The Zoom cloud recording for your live class has been automatically uploaded.</p>
-		<p><strong>Course:</strong> {course.title}</p>
-		<p><strong>Lesson:</strong> {lesson.title}</p>
-		<p>The recording has been added to the lesson content.</p>
+		<p>The Zoom cloud recording for your live class is ready.</p>
+		<p><strong>Title:</strong> {live_class.name}</p>
+		<p>Students with enrollment can now watch the recording through the LMS.</p>
 	"""
 	notification.insert(ignore_permissions=True)
 	frappe.db.commit()

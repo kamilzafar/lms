@@ -2035,40 +2035,37 @@ def zoom_webhook():
 
 			# Generate encrypted token using HMAC-SHA256 (hex-encoded, lowercase)
 			# Zoom expects: HMAC_SHA256(plainToken, webhook_secret_token) as lowercase hex
+			# Formula: HMAC-SHA256(message=plainToken, key=webhook_secret_token)
 			encrypted_token = hmac.new(
 				webhook_secret.encode("utf-8") if webhook_secret else b"",
 				plain_token.encode("utf-8"),
 				hashlib.sha256
-			).hexdigest()  # Returns lowercase hex string (NOT base64, NOT uppercase)
+			).hexdigest()  # Returns lowercase hex string (64 chars, NOT base64, NOT uppercase)
 
 			# VALIDATION DEBUG: Log generated token
 			print(f"Generated encryptedToken: {encrypted_token}")
 			print(f"Webhook secret length: {len(webhook_secret) if webhook_secret else 0}")
+			print(f"encryptedToken type: {type(encrypted_token)}")
+			print(f"encryptedToken is hex: {all(c in '0123456789abcdef' for c in encrypted_token)}")
 			print(f"=== END VALIDATION REQUEST ===\n")
 
-			# Construct response exactly as Zoom expects: { "plainToken": "...", "encryptedToken": "..." }
-			# Must be a JSON object (dict), not a string
-			validation_response = {
+			# CRITICAL: Construct response as Python dict (will be serialized to JSON object, NOT string)
+			# Zoom expects: {"plainToken": "...", "encryptedToken": "..."}
+			# NOT: '{"plainToken": "...", "encryptedToken": "..."}'  (string)
+			# NOT: {"message": {"plainToken": "...", "encryptedToken": "..."}}  (wrapped)
+
+			# Set HTTP 200 status
+			frappe.local.response.http_status_code = 200
+
+			# Set Content-Type header
+			frappe.response["content_type"] = "application/json"
+
+			# Return raw dict - Frappe will serialize to JSON object
+			# Using frappe.response directly (not frappe.local.response) ensures clean output
+			return {
 				"plainToken": plain_token,
 				"encryptedToken": encrypted_token
 			}
-
-			# Set HTTP 200 and Content-Type
-			frappe.local.response.http_status_code = 200
-			frappe.local.response["Content-Type"] = "application/json"
-
-			# CRITICAL: Return raw JSON response without Frappe's message wrapper
-			# Clear any existing response data and set our validation response directly
-			frappe.local.response.clear()
-			frappe.local.response["http_status_code"] = 200
-			frappe.local.response["message"] = validation_response
-			frappe.local.response["data"] = validation_response
-
-			# Also update frappe.response for compatibility
-			frappe.response.clear()
-			frappe.response.update(validation_response)
-
-			return validation_response
 
 		# 3. For all other events, verify signature
 		signature = frappe.request.headers.get("x-zm-signature")
@@ -2181,3 +2178,163 @@ def verify_zoom_signature(signature, timestamp, secret):
 	except Exception as e:
 		frappe.log_error(f"Zoom Webhook Signature Verification Exception: {str(e)}", "Zoom Webhook Error")
 		return False
+
+
+@frappe.whitelist()
+def get_zoom_recording_playback(live_class_name):
+	"""
+	Return fresh Zoom playback URL and passcode for enrolled students.
+
+	Security:
+	- Verifies enrollment via get_membership()
+	- Checks moderator/instructor roles for exemptions
+	- Fetches fresh play_url from Zoom API (URLs expire ~24 hours)
+
+	Args:
+		live_class_name: Name of LMS Live Class document
+
+	Returns:
+		{
+			"has_access": True/False,
+			"play_url": "https://zoom.us/rec/play/...",
+			"passcode": "abcd1234",
+			"duration": 3600,
+			"lesson_name": "Lesson Name",
+			"file_size": 1234567,
+			"message": "error message if no access"
+		}
+	"""
+	from lms.lms.utils import get_membership
+	import requests
+
+	# 1. Get live class details
+	live_class = frappe.get_doc("LMS Live Class", live_class_name)
+
+	if not live_class.recording_processed:
+		return {
+			"has_access": False,
+			"message": _("Recording not yet available for this live class")
+		}
+
+	# 2. Determine course for enrollment verification
+	course = None
+	if live_class.lesson:
+		# Use direct lesson link (preferred method)
+		course = frappe.db.get_value("Course Lesson", live_class.lesson, "course")
+	elif live_class.batch_name:
+		# Fallback: get course from batch
+		batch = frappe.get_doc("LMS Batch", live_class.batch_name)
+		if batch.courses:
+			course = batch.courses[0].course
+
+	if not course:
+		return {
+			"has_access": False,
+			"message": _("Unable to determine course for enrollment verification")
+		}
+
+	# 3. Check enrollment (CRITICAL SECURITY CHECK)
+	membership = get_membership(course, frappe.session.user)
+
+	# Check role-based exemptions
+	is_moderator = frappe.db.get_value("User", frappe.session.user, "is_moderator") == 1
+	is_instructor_check = frappe.db.exists(
+		"Course Instructor",
+		{"parent": course, "instructor": frappe.session.user}
+	)
+
+	has_access = membership or is_moderator or is_instructor_check
+
+	if not has_access:
+		return {
+			"has_access": False,
+			"message": _("You must be enrolled in the course to watch this recording")
+		}
+
+	# 4. Fetch fresh play_url from Zoom API
+	# Stored URLs expire after ~24 hours, always fetch fresh
+	try:
+		from lms.lms.doctype.lms_batch.lms_batch import authenticate
+
+		access_token = authenticate(live_class.zoom_account)
+		meeting_id = live_class.meeting_id
+
+		if not meeting_id:
+			return {
+				"has_access": False,
+				"message": _("Meeting ID not found for this live class")
+			}
+
+		# Call Zoom API to get fresh recording details
+		zoom_api_url = f"https://api.zoom.us/v2/meetings/{meeting_id}/recordings"
+		headers = {"Authorization": f"Bearer {access_token}"}
+		response = requests.get(zoom_api_url, headers=headers, timeout=30)
+		response.raise_for_status()
+
+		recording_data = response.json()
+
+		# Find the MP4 recording file
+		fresh_play_url = None
+		for rec_file in recording_data.get("recording_files", []):
+			# Match by zoom_recording_id if available, or by type
+			if (rec_file.get("id") == live_class.zoom_recording_id or
+				(rec_file.get("file_type") == "MP4" and rec_file.get("recording_type") in [
+					"shared_screen_with_speaker_view",
+					"shared_screen_with_gallery_view",
+					"speaker_view",
+					"gallery_view"
+				])):
+				fresh_play_url = rec_file.get("play_url")
+				break
+
+		if not fresh_play_url:
+			return {
+				"has_access": False,
+				"message": _("Recording file not found in Zoom. It may have been deleted.")
+			}
+
+		# 5. Get passcode (from database, encrypted)
+		passcode = live_class.get_password("recording_passcode", raise_exception=False) or ""
+
+		# 6. Get lesson name
+		lesson_title = live_class.title
+		if live_class.lesson:
+			lesson_title = frappe.db.get_value("Course Lesson", live_class.lesson, "title") or lesson_title
+
+		# 7. Return playback data
+		return {
+			"has_access": True,
+			"play_url": fresh_play_url,
+			"passcode": passcode,
+			"duration": live_class.recording_duration or 0,
+			"lesson_name": lesson_title,
+			"file_size": live_class.recording_file_size or 0
+		}
+
+	except requests.exceptions.HTTPError as e:
+		if e.response and e.response.status_code == 404:
+			# Recording deleted from Zoom
+			frappe.db.set_value("LMS Live Class", live_class_name, "recording_processed", 0)
+			return {
+				"has_access": False,
+				"message": _("Recording has been deleted from Zoom")
+			}
+		else:
+			frappe.log_error(
+				f"Zoom API error fetching recording for {live_class_name}: {str(e)}\nResponse: {e.response.text if e.response else 'N/A'}",
+				"Zoom Recording Playback"
+			)
+			return {
+				"has_access": False,
+				"message": _("Unable to fetch recording from Zoom. Please try again later.")
+			}
+
+	except Exception as e:
+		frappe.log_error(
+			f"Error in get_zoom_recording_playback for {live_class_name}: {str(e)}\n{frappe.get_traceback()}",
+			"Zoom Recording Playback"
+		)
+		return {
+			"has_access": False,
+			"message": _("An error occurred while fetching the recording")
+		}

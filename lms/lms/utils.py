@@ -1022,6 +1022,22 @@ def get_lesson(course, chapter, lesson):
 	lesson_details.paid_certificate = course_info.paid_certificate
 	lesson_details.disable_self_learning = course_info.disable_self_learning
 	lesson_details.videos = get_video_details(lesson_name)
+
+	# Check if lesson has linked Zoom recording
+	live_class_with_recording = frappe.db.get_value(
+		"LMS Live Class",
+		{"lesson": lesson_name, "recording_processed": 1},
+		["name", "recording_duration"],
+		as_dict=True
+	)
+
+	if live_class_with_recording:
+		lesson_details.has_recording = True
+		lesson_details.live_class_name = live_class_with_recording.name
+		lesson_details.recording_duration = live_class_with_recording.recording_duration
+	else:
+		lesson_details.has_recording = False
+
 	return lesson_details
 
 
