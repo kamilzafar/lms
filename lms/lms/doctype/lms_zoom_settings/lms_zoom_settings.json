@@ -15,7 +15,8 @@
   "column_break_fxxg",
   "account_id",
   "client_id",
-  "client_secret"
+  "client_secret",
+  "webhook_secret_token"
  ],
  "fields": [
   {
@@ -42,6 +43,12 @@
    "fieldtype": "Password",
    "label": "Client Secret",
    "reqd": 1
+  },
+  {
+   "description": "Secret token from Zoom App webhook configuration for signature verification",
+   "fieldname": "webhook_secret_token",
+   "fieldtype": "Password",
+   "label": "Webhook Secret Token"
   },
   {
    "fieldname": "member",

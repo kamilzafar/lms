@@ -30,7 +30,12 @@
   "section_break_yrpq",
   "start_url",
   "column_break_yokr",
-  "join_url"
+  "join_url",
+  "section_break_recording",
+  "recording_processed",
+  "recording_file",
+  "column_break_recording",
+  "recording_url"
  ],
  "fields": [
   {
@@ -166,6 +171,36 @@
   {
    "fieldname": "column_break_aony",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_recording",
+   "fieldtype": "Section Break",
+   "label": "Recording"
+  },
+  {
+   "default": "0",
+   "description": "Whether the Zoom cloud recording has been downloaded and attached",
+   "fieldname": "recording_processed",
+   "fieldtype": "Check",
+   "label": "Recording Processed"
+  },
+  {
+   "description": "Reference to the uploaded recording file",
+   "fieldname": "recording_file",
+   "fieldtype": "Link",
+   "label": "Recording File",
+   "options": "File"
+  },
+  {
+   "fieldname": "column_break_recording",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "File URL of the recording",
+   "fieldname": "recording_url",
+   "fieldtype": "Data",
+   "label": "Recording URL",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,

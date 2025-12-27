@@ -503,6 +503,15 @@ const getSidebarItems = () => {
 					icon: 'TrendingUp',
 					to: 'Statistics',
 					activeFor: ['Statistics'],
+					condition: () => {
+						// Hide from LMS Students and Teachers
+						// Show only to Instructors/Evaluators
+						return (
+							userResource?.data &&
+							!userResource.data.is_moderator &&
+							(userResource.data.is_instructor || userResource.data.is_evaluator)
+						)
+					},
 				},
 				{
 					label: 'Contact Us',

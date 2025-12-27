@@ -1955,3 +1955,74 @@ def get_upcoming_batches():
 		limit=4,
 		pluck="name",
 	)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def zoom_webhook():
+	"""
+	Webhook endpoint for Zoom cloud recording events.
+	Called by Zoom when a recording is completed.
+	"""
+	import hmac
+	import hashlib
+
+	# 1. Verify webhook signature
+	signature = frappe.request.headers.get("x-zm-signature")
+	timestamp = frappe.request.headers.get("x-zm-request-timestamp")
+
+	zoom_settings = frappe.get_single("LMS Zoom Settings")
+	webhook_secret = zoom_settings.webhook_secret_token
+
+	if not verify_zoom_signature(signature, timestamp, webhook_secret):
+		frappe.throw("Invalid webhook signature", frappe.AuthenticationError)
+
+	# 2. Parse webhook payload
+	payload = json.loads(frappe.request.data)
+	event = payload.get("event")
+
+	# Handle verification event (Zoom sends this when you first set up webhook)
+	if event == "endpoint.url_validation":
+		plain_token = payload.get("payload", {}).get("plainToken")
+		encrypted_token = hmac.new(
+			webhook_secret.encode(),
+			plain_token.encode(),
+			hashlib.sha256
+		).hexdigest()
+		return {"plainToken": plain_token, "encryptedToken": encrypted_token}
+
+	# 3. Handle recording completed event
+	if event == "recording.completed":
+		meeting_uuid = payload.get("payload", {}).get("object", {}).get("uuid")
+		recording_files = payload.get("payload", {}).get("object", {}).get("recording_files", [])
+
+		# Queue background job (don't block webhook response)
+		frappe.enqueue(
+			"lms.lms.doctype.lms_live_class.lms_live_class.process_zoom_recording",
+			meeting_uuid=meeting_uuid,
+			recording_files=recording_files,
+			queue="long",
+			timeout=1800  # 30 minutes
+		)
+
+		return {"status": "success"}
+
+	return {"status": "unhandled_event"}
+
+
+def verify_zoom_signature(signature, timestamp, secret):
+	"""Verify Zoom webhook signature"""
+	import hmac
+	import hashlib
+
+	if not signature or not timestamp or not secret:
+		return False
+
+	message = f"v0:{timestamp}:{frappe.request.data.decode()}"
+	hash_for_verify = hmac.new(
+		secret.encode(),
+		message.encode(),
+		hashlib.sha256
+	).hexdigest()
+
+	expected_signature = f"v0={hash_for_verify}"
+	return hmac.compare_digest(expected_signature, signature)

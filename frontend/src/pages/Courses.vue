@@ -7,7 +7,7 @@
 		<Dropdown
 			placement="start"
 			side="bottom"
-			v-if="canCreateCourse()"
+			v-if="canCreateCourse() && !isModerator"
 			:options="[
 				{
 					label: __('New Course'),
@@ -61,7 +61,7 @@
 			>
 				<TabButtons :buttons="courseTabs" v-model="currentTab" class="w-fit" />
 
-				<div v-if="!isLMSStudent" class="grid grid-cols-2 gap-2">
+				<div v-if="!isLMSStudent && !isModerator" class="grid grid-cols-2 gap-2">
 					<FormControl
 						v-model="title"
 						:placeholder="__('Search by Title')"
@@ -81,7 +81,7 @@
 				</div>
 
 				<FormControl
-					v-if="!isLMSStudent"
+					v-if="!isLMSStudent && !isModerator"
 					v-model="certification"
 					:label="__('Certification')"
 					type="checkbox"
@@ -153,12 +153,19 @@ const isLMSStudent = computed(() => {
 	)
 })
 
+// Check if user is Moderator
+const isModerator = computed(() => {
+	return user.data && user.data.is_moderator
+})
+
 const currentTab = ref('Live')
 
 onMounted(() => {
 	// Set default tab based on role after user data is available
 	if (isLMSStudent.value) {
 		currentTab.value = 'Enrolled'
+	} else if (isModerator.value) {
+		currentTab.value = 'Teacher of'
 	}
 
 	setFiltersFromQuery()
@@ -297,7 +304,7 @@ const updateTabFilter = () => {
 				'>=',
 				dayjs().add(-3, 'month').format('YYYY-MM-DD'),
 			]
-		} else if (currentTab.value == 'Created') {
+		} else if (currentTab.value == 'Created' || currentTab.value == 'Teacher of') {
 			filters.value['created'] = 1
 		} else if (currentTab.value == 'Unpublished') {
 			filters.value['published'] = 0
@@ -353,6 +360,15 @@ watch(currentTab, () => {
 })
 
 const courseTabs = computed(() => {
+	// Teachers see only "Teacher of" tab
+	if (isModerator.value) {
+		return [
+			{
+				label: __('Teacher of'),
+			},
+		]
+	}
+
 	// LMS Students see only Enrolled and Live tabs
 	if (isLMSStudent.value) {
 		return [
@@ -365,7 +381,7 @@ const courseTabs = computed(() => {
 		]
 	}
 
-	// Other roles see full tab list
+	// Other roles (Instructors/Evaluators) see full tab list
 	let tabs = [
 		{
 			label: __('Live'),
@@ -378,7 +394,6 @@ const courseTabs = computed(() => {
 		},
 	]
 	if (
-		user.data?.is_moderator ||
 		user.data?.is_instructor ||
 		user.data?.is_evaluator
 	) {

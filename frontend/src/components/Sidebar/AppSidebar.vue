@@ -170,7 +170,7 @@
 			v-model="showHelpModal"
 			v-model:articles="articles"
 			appName="learning"
-			title="Frappe Learning"
+			title="Zensbot LMS"
 			:logo="LMSLogo"
 			:afterSkip="(step) => capture('onboarding_step_skipped_' + step)"
 			:afterSkipAll="() => capture('onboarding_steps_skipped')"

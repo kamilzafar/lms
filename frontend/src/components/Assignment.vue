@@ -58,7 +58,7 @@
 					{{ __("You've successfully submitted the assignment.") }}
 					{{
 						__(
-							"Once the moderator grades your submission, you'll find the details here."
+							"Once the teacher grades your submission, you'll find the details here."
 						)
 					}}
 					{{ __('Feel free to make edits to your submission if needed.') }}

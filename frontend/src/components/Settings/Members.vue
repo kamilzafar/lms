@@ -224,7 +224,7 @@ const getRole = (role: string) => {
 	const map: Record<string, string> = {
 		'LMS Student': 'Student',
 		'Course Creator': 'Instructor',
-		Moderator: 'Moderator',
+		Moderator: 'Teacher',
 		'Batch Evaluator': 'Evaluator',
 	}
 	return map[role]
