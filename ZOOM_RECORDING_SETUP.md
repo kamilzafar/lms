@@ -51,6 +51,15 @@ The Zoom Auto-Recording Upload feature automatically downloads cloud recordings 
 
 ## Setup Instructions
 
+**IMPORTANT - Order of Operations**:
+1. Configure your Zoom App and get credentials (Step 1)
+2. **Configure the Webhook Secret Token in LMS FIRST** (Step 2)
+3. Then validate the webhook endpoint in Zoom (Step 1.6)
+
+This order is critical - Zoom validation will fail if the secret token is not configured in LMS first.
+
+---
+
 ### Step 1: Configure Zoom App
 
 1. **Go to Zoom App Marketplace**
@@ -89,6 +98,8 @@ The Zoom Auto-Recording Upload feature automatically downloads cloud recordings 
 
 ### Step 2: Configure LMS Zoom Settings
 
+**IMPORTANT**: You MUST configure the Webhook Secret Token BEFORE validating the endpoint in Step 1.
+
 1. **Login to Frappe Desk**
    - Navigate to: `https://yoursite.com/app`
 
@@ -105,6 +116,8 @@ The Zoom Auto-Recording Upload feature automatically downloads cloud recordings 
    ```
 
 4. **Save the Document**
+
+**Note**: The webhook endpoint will fail validation if the Webhook Secret Token is not configured first. Make sure to save this field before attempting to validate the endpoint in the Zoom App.
 
 ### Step 3: Ensure Background Worker is Running
 
@@ -171,6 +184,47 @@ sudo supervisorctl status all
 
 ## Troubleshooting
 
+### Endpoint Validation Failing ("Please validate your endpoint URL")
+
+This error occurs when Zoom cannot verify your webhook endpoint.
+
+**Common Causes & Solutions**:
+
+1. **Webhook Secret Token Not Configured**
+   - Error logged: "No webhook_secret_token configured"
+   - **Solution**: Configure the Webhook Secret Token in LMS Zoom Settings BEFORE validating in Zoom App
+   ```bash
+   # Check if token is configured
+   bench --site yoursite.com console
+   ```
+   ```python
+   frappe.get_all("LMS Zoom Settings", fields=["webhook_secret_token"])
+   # Should return a record with the token, not empty
+   ```
+
+2. **Endpoint Not Accessible**
+   - Zoom cannot reach your server
+   - **Solution**: Ensure your server is publicly accessible (not localhost)
+   - Test with: `curl -X POST https://yoursite.com/api/method/lms.lms.api.zoom_webhook`
+
+3. **HTTPS/SSL Issues**
+   - Zoom requires valid HTTPS
+   - **Solution**: Ensure your SSL certificate is valid and trusted
+
+4. **Check Error Logs**
+   ```bash
+   # View webhook validation errors
+   bench --site yoursite.com console
+   ```
+   ```python
+   frappe.get_all("Error Log",
+       filters={"error": ["like", "%Zoom Webhook Validation%"]},
+       fields=["name", "error", "creation"],
+       order_by="creation desc",
+       limit=5
+   )
+   ```
+
 ### Recording Not Uploading
 
 **Check 1: Verify Webhook is Reaching LMS**
@@ -179,11 +233,12 @@ sudo supervisorctl status all
 bench --site yoursite.com console
 ```
 ```python
+# Check for webhook activity
 frappe.get_all("Error Log",
-    filters={"method": "lms.lms.api.zoom_webhook"},
+    filters={"error": ["like", "%Zoom Webhook%"]},
     fields=["name", "error", "creation"],
     order_by="creation desc",
-    limit=5
+    limit=10
 )
 ```
 
@@ -197,22 +252,28 @@ sudo supervisorctl status frappe-bench-workers:
 ```
 
 **Check 3: Webhook Secret Token**
-- Ensure `webhook_secret_token` in LMS Zoom Settings matches Zoom app
+- Ensure `webhook_secret_token` in LMS Zoom Settings matches Zoom app EXACTLY
 - Signature validation will fail if mismatched
+- No extra spaces or special characters
 
 **Check 4: Zoom API Permissions**
 - Ensure your Zoom app has recording download permissions
 - Check: App → Scopes → `recording:read:admin`
+- Check: App → Feature → Event Subscriptions → "Recording Completed" is subscribed
 
 ### Webhook Signature Validation Failed
 
-**Error**: "Invalid signature"
+**Error**: "Invalid webhook signature" in Error Log
 
 **Solution**:
 1. Copy the **exact** Secret Token from Zoom app
-2. Paste into `webhook_secret_token` field (no extra spaces)
+   - Go to Zoom App → Feature → Event Subscriptions
+   - Copy the "Secret Token" (not the subscription name)
+2. Paste into `webhook_secret_token` field in LMS Zoom Settings
+   - Remove any extra spaces before/after
+   - Ensure no line breaks or special characters
 3. Save LMS Zoom Settings
-4. Test again
+4. Test by creating a new recording
 
 ### Recording Downloads But Doesn't Appear in Lesson
 
