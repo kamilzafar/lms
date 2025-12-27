@@ -1987,96 +1987,145 @@ def zoom_webhook():
 		payload = json.loads(frappe.request.data)
 		event = payload.get("event")
 
+		# Log incoming webhook event for debugging
+		frappe.logger().info(f"Zoom Webhook Received: event={event}")
+
 		# 2. Handle endpoint validation FIRST (before signature verification)
 		# Zoom sends this when you first configure the webhook URL
 		if event == "endpoint.url_validation":
 			plain_token = payload.get("payload", {}).get("plainToken")
 
+			# Debug log: received validation request
+			frappe.logger().info(f"Zoom endpoint validation request received. plainToken={plain_token}")
+
 			if not plain_token:
-				frappe.log_error("Missing plainToken in validation request", "Zoom Webhook Validation")
+				error_msg = "Missing plainToken in validation request"
+				frappe.log_error(error_msg, "Zoom Webhook Validation")
+				frappe.logger().error(f"Zoom Webhook Validation Failed: {error_msg}")
 				frappe.local.response.http_status_code = 200
 				return {"status": "error", "message": "Missing plainToken"}
 
 			# Get webhook secret - handle case where settings don't exist yet
+			webhook_secret = None
 			try:
 				zoom_settings = frappe.get_all(
 					"LMS Zoom Settings",
-					fields=["webhook_secret_token"],
+					fields=["name", "webhook_secret_token"],
 					limit=1
 				)
 
-				if not zoom_settings or not zoom_settings[0].get("webhook_secret_token"):
-					frappe.log_error(
-						"No webhook_secret_token configured in any LMS Zoom Settings",
-						"Zoom Webhook Validation"
-					)
-					# Still try to respond - use empty secret as fallback
+				if not zoom_settings:
+					error_msg = "No LMS Zoom Settings records found"
+					frappe.log_error(error_msg, "Zoom Webhook Validation")
+					frappe.logger().error(f"Zoom Webhook Validation: {error_msg}")
+					webhook_secret = ""
+				elif not zoom_settings[0].get("webhook_secret_token"):
+					error_msg = f"webhook_secret_token is empty in LMS Zoom Settings: {zoom_settings[0].get('name')}"
+					frappe.log_error(error_msg, "Zoom Webhook Validation")
+					frappe.logger().error(f"Zoom Webhook Validation: {error_msg}")
 					webhook_secret = ""
 				else:
 					webhook_secret = zoom_settings[0].get("webhook_secret_token")
+					frappe.logger().info(f"Zoom Webhook: Using webhook_secret_token from {zoom_settings[0].get('name')} (length: {len(webhook_secret)})")
+
 			except Exception as e:
-				frappe.log_error(f"Error fetching Zoom settings: {str(e)}", "Zoom Webhook Validation")
+				error_msg = f"Error fetching Zoom settings: {str(e)}"
+				frappe.log_error(error_msg, "Zoom Webhook Validation")
+				frappe.logger().error(f"Zoom Webhook Validation: {error_msg}")
 				webhook_secret = ""
 
-			# Generate encrypted token
+			# Generate encrypted token using HMAC-SHA256
 			encrypted_token = hmac.new(
 				webhook_secret.encode() if webhook_secret else b"",
 				plain_token.encode(),
 				hashlib.sha256
 			).hexdigest()
 
-			frappe.local.response.http_status_code = 200
-			return {
+			# Debug log: generated token
+			frappe.logger().info(
+				f"Zoom Webhook Validation: Generated encryptedToken={encrypted_token} "
+				f"from plainToken={plain_token} using webhook_secret (length: {len(webhook_secret) if webhook_secret else 0})"
+			)
+
+			# Construct response exactly as Zoom expects
+			validation_response = {
 				"plainToken": plain_token,
 				"encryptedToken": encrypted_token
 			}
+
+			# Set response headers explicitly
+			frappe.local.response.http_status_code = 200
+			frappe.local.response["Content-Type"] = "application/json"
+
+			# Log the response being sent
+			frappe.logger().info(f"Zoom Webhook Validation Response: {json.dumps(validation_response)}")
+
+			# Return raw response without Frappe wrapping
+			frappe.local.response.update({"data": validation_response})
+			frappe.response.update(validation_response)
+
+			return validation_response
 
 		# 3. For all other events, verify signature
 		signature = frappe.request.headers.get("x-zm-signature")
 		timestamp = frappe.request.headers.get("x-zm-request-timestamp")
 
+		frappe.logger().info(f"Zoom Webhook: Verifying signature for event={event}")
+
 		# Get webhook secret from first available Zoom Settings
 		try:
 			zoom_settings = frappe.get_all(
 				"LMS Zoom Settings",
-				fields=["webhook_secret_token"],
+				fields=["name", "webhook_secret_token"],
 				limit=1
 			)
 
 			if not zoom_settings or not zoom_settings[0].get("webhook_secret_token"):
-				frappe.log_error(
-					"No webhook_secret_token configured. Cannot verify webhook signature.",
-					"Zoom Webhook Error"
-				)
+				error_msg = "No webhook_secret_token configured. Cannot verify webhook signature."
+				frappe.log_error(error_msg, "Zoom Webhook Error")
+				frappe.logger().error(f"Zoom Webhook: {error_msg}")
 				frappe.local.response.http_status_code = 200
 				return {"status": "error", "message": "Webhook secret not configured"}
 
 			webhook_secret = zoom_settings[0].get("webhook_secret_token")
+			frappe.logger().info(f"Zoom Webhook: Using webhook_secret from {zoom_settings[0].get('name')} for signature verification")
+
 		except Exception as e:
-			frappe.log_error(f"Error fetching Zoom settings: {str(e)}", "Zoom Webhook Error")
+			error_msg = f"Error fetching Zoom settings: {str(e)}"
+			frappe.log_error(error_msg, "Zoom Webhook Error")
+			frappe.logger().error(f"Zoom Webhook: {error_msg}")
 			frappe.local.response.http_status_code = 200
 			return {"status": "error", "message": "Configuration error"}
 
 		# Verify signature
 		if not verify_zoom_signature(signature, timestamp, webhook_secret):
+			error_msg = f"Invalid webhook signature for event={event}. signature={signature}, timestamp={timestamp}"
 			frappe.log_error(
-				f"Invalid webhook signature. Headers: {dict(frappe.request.headers)}",
+				f"{error_msg}\nHeaders: {dict(frappe.request.headers)}",
 				"Zoom Webhook Signature Verification Failed"
 			)
+			frappe.logger().error(f"Zoom Webhook: {error_msg}")
 			frappe.local.response.http_status_code = 200
 			return {"status": "error", "message": "Invalid signature"}
+
+		frappe.logger().info(f"Zoom Webhook: Signature verification successful for event={event}")
 
 		# 4. Handle recording completed event
 		if event == "recording.completed":
 			meeting_uuid = payload.get("payload", {}).get("object", {}).get("uuid")
 			recording_files = payload.get("payload", {}).get("object", {}).get("recording_files", [])
 
+			frappe.logger().info(f"Zoom Webhook: recording.completed event for meeting_uuid={meeting_uuid}, files={len(recording_files)}")
+
 			if not meeting_uuid:
-				frappe.log_error("Missing meeting UUID in recording.completed event", "Zoom Webhook Error")
+				error_msg = "Missing meeting UUID in recording.completed event"
+				frappe.log_error(error_msg, "Zoom Webhook Error")
+				frappe.logger().error(f"Zoom Webhook: {error_msg}")
 				frappe.local.response.http_status_code = 200
 				return {"status": "error", "message": "Missing meeting UUID"}
 
 			# Queue background job (don't block webhook response)
+			frappe.logger().info(f"Zoom Webhook: Queueing background job to process recording for meeting_uuid={meeting_uuid}")
 			frappe.enqueue(
 				"lms.lms.doctype.lms_live_class.lms_live_class.process_zoom_recording",
 				meeting_uuid=meeting_uuid,
@@ -2085,10 +2134,12 @@ def zoom_webhook():
 				timeout=1800  # 30 minutes
 			)
 
+			frappe.logger().info(f"Zoom Webhook: Recording processing queued successfully for meeting_uuid={meeting_uuid}")
 			frappe.local.response.http_status_code = 200
 			return {"status": "success", "message": "Recording processing queued"}
 
 		# 5. Log unhandled events for debugging
+		frappe.logger().warning(f"Zoom Webhook: Unhandled event type: {event}")
 		frappe.log_error(
 			f"Unhandled Zoom webhook event: {event}\nPayload: {json.dumps(payload, indent=2)}",
 			"Zoom Webhook Unhandled Event"
@@ -2096,30 +2147,67 @@ def zoom_webhook():
 		frappe.local.response.http_status_code = 200
 		return {"status": "success", "message": f"Event {event} received but not processed"}
 
+	except json.JSONDecodeError as e:
+		# Handle invalid JSON payload
+		error_msg = f"Invalid JSON payload: {str(e)}"
+		frappe.log_error(
+			f"{error_msg}\nRaw data: {frappe.request.data}",
+			"Zoom Webhook JSON Error"
+		)
+		frappe.logger().error(f"Zoom Webhook: {error_msg}")
+		frappe.local.response.http_status_code = 200
+		return {"status": "error", "message": "Invalid JSON"}
+
 	except Exception as e:
 		# Always return HTTP 200 even on error (Zoom requirement)
+		error_msg = f"Exception in zoom_webhook: {str(e)}"
 		frappe.log_error(
-			f"Exception in zoom_webhook: {str(e)}\n{frappe.get_traceback()}",
+			f"{error_msg}\n{frappe.get_traceback()}",
 			"Zoom Webhook Exception"
 		)
+		frappe.logger().error(f"Zoom Webhook: {error_msg}")
 		frappe.local.response.http_status_code = 200
 		return {"status": "error", "message": "Internal error", "error": str(e)}
 
 
 def verify_zoom_signature(signature, timestamp, secret):
-	"""Verify Zoom webhook signature"""
+	"""Verify Zoom webhook signature using HMAC-SHA256"""
 	import hmac
 	import hashlib
 
 	if not signature or not timestamp or not secret:
+		frappe.logger().warning(
+			f"Zoom Webhook Signature Verification: Missing parameters - "
+			f"signature={'present' if signature else 'missing'}, "
+			f"timestamp={'present' if timestamp else 'missing'}, "
+			f"secret={'present' if secret else 'missing'}"
+		)
 		return False
 
-	message = f"v0:{timestamp}:{frappe.request.data.decode()}"
-	hash_for_verify = hmac.new(
-		secret.encode(),
-		message.encode(),
-		hashlib.sha256
-	).hexdigest()
+	try:
+		# Construct message exactly as Zoom does: v0:{timestamp}:{request_body}
+		message = f"v0:{timestamp}:{frappe.request.data.decode()}"
+		hash_for_verify = hmac.new(
+			secret.encode(),
+			message.encode(),
+			hashlib.sha256
+		).hexdigest()
 
-	expected_signature = f"v0={hash_for_verify}"
-	return hmac.compare_digest(expected_signature, signature)
+		expected_signature = f"v0={hash_for_verify}"
+
+		# Use constant-time comparison to prevent timing attacks
+		is_valid = hmac.compare_digest(expected_signature, signature)
+
+		if not is_valid:
+			frappe.logger().warning(
+				f"Zoom Webhook Signature Verification Failed: "
+				f"expected={expected_signature}, received={signature}"
+			)
+		else:
+			frappe.logger().info("Zoom Webhook Signature Verification: Success")
+
+		return is_valid
+
+	except Exception as e:
+		frappe.logger().error(f"Zoom Webhook Signature Verification Exception: {str(e)}")
+		return False

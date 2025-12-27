@@ -182,6 +182,87 @@ sudo supervisorctl status all
 
 ---
 
+## Debugging & Logs
+
+The webhook endpoint now includes comprehensive debug logging to help troubleshoot issues.
+
+### View Webhook Logs
+
+**Real-time logs (development):**
+```bash
+# Watch logs in real-time
+bench --site yoursite.com logs
+```
+
+**Production logs:**
+```bash
+# View recent logs
+tail -f /path/to/frappe-bench/logs/web.log
+
+# Or in Frappe Desk
+# Search for "Error Log" doctype
+# Filter by error title containing "Zoom Webhook"
+```
+
+### Log Messages to Look For
+
+**Validation Request:**
+```
+INFO Zoom Webhook Received: event=endpoint.url_validation
+INFO Zoom endpoint validation request received. plainToken=abc123...
+INFO Zoom Webhook: Using webhook_secret_token from LMS-ZOOM-001 (length: 32)
+INFO Zoom Webhook Validation: Generated encryptedToken=def456... from plainToken=abc123...
+INFO Zoom Webhook Validation Response: {"plainToken": "abc123...", "encryptedToken": "def456..."}
+```
+
+**Recording Completed Event:**
+```
+INFO Zoom Webhook Received: event=recording.completed
+INFO Zoom Webhook: Verifying signature for event=recording.completed
+INFO Zoom Webhook Signature Verification: Success
+INFO Zoom Webhook: recording.completed event for meeting_uuid=xyz789, files=2
+INFO Zoom Webhook: Queueing background job to process recording
+INFO Zoom Webhook: Recording processing queued successfully
+```
+
+**Common Error Messages:**
+
+| Log Message | Meaning | Solution |
+|-------------|---------|----------|
+| `No LMS Zoom Settings records found` | No Zoom settings configured | Create LMS Zoom Settings record |
+| `webhook_secret_token is empty` | Secret token not set | Add secret token from Zoom App |
+| `Zoom Webhook Signature Verification Failed` | Invalid signature | Check webhook secret token matches Zoom |
+| `Missing plainToken in validation request` | Malformed validation request | Check Zoom is sending correct payload |
+
+### Debug Validation Issues
+
+If Zoom validation fails:
+
+1. **Check logs for validation request:**
+   ```bash
+   bench --site yoursite.com console
+   ```
+   ```python
+   # View recent webhook logs
+   import subprocess
+   subprocess.run(["tail", "-100", "logs/web.log"])
+   ```
+
+2. **Verify webhook secret token:**
+   ```python
+   # In bench console
+   frappe.get_all("LMS Zoom Settings",
+       fields=["name", "webhook_secret_token"],
+       limit=1
+   )
+   # Should show: [{"name": "LMS-ZOOM-001", "webhook_secret_token": "actual_token"}]
+   ```
+
+3. **Check what response is being sent:**
+   - Look for log line: `Zoom Webhook Validation Response: {...}`
+   - Verify it contains both `plainToken` and `encryptedToken`
+   - Verify both values are non-empty strings
+
 ## Troubleshooting
 
 ### Endpoint Validation Failing ("Please validate your endpoint URL")
