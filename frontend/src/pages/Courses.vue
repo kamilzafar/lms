@@ -61,7 +61,7 @@
 			>
 				<TabButtons :buttons="courseTabs" v-model="currentTab" class="w-fit" />
 
-				<div class="grid grid-cols-2 gap-2">
+				<div v-if="!isLMSStudent" class="grid grid-cols-2 gap-2">
 					<FormControl
 						v-model="title"
 						:placeholder="__('Search by Title')"
@@ -81,6 +81,7 @@
 				</div>
 
 				<FormControl
+					v-if="!isLMSStudent"
 					v-model="certification"
 					:label="__('Certification')"
 					type="checkbox"
@@ -139,11 +140,27 @@ const currentCategory = ref(null)
 const title = ref('')
 const certification = ref(false)
 const filters = ref({})
-const currentTab = ref('Live')
 const { brand } = sessionStore()
 const courseCount = ref(0)
 
+// Check if user is LMS Student (not moderator/instructor/evaluator)
+const isLMSStudent = computed(() => {
+	return (
+		user.data &&
+		!user.data.is_moderator &&
+		!user.data.is_instructor &&
+		!user.data.is_evaluator
+	)
+})
+
+const currentTab = ref('Live')
+
 onMounted(() => {
+	// Set default tab based on role after user data is available
+	if (isLMSStudent.value) {
+		currentTab.value = 'Enrolled'
+	}
+
 	setFiltersFromQuery()
 	updateCourses()
 	getCourseCount()
@@ -336,6 +353,19 @@ watch(currentTab, () => {
 })
 
 const courseTabs = computed(() => {
+	// LMS Students see only Enrolled and Live tabs
+	if (isLMSStudent.value) {
+		return [
+			{
+				label: __('Enrolled'),
+			},
+			{
+				label: __('Live'),
+			},
+		]
+	}
+
+	// Other roles see full tab list
 	let tabs = [
 		{
 			label: __('Live'),

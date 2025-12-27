@@ -27,7 +27,7 @@
 				</div>
 			</div>
 			<div
-				v-if="sidebarSettings.data?.web_pages?.length || isModerator"
+				v-if="false"
 				class="mt-4"
 			>
 				<div
@@ -184,11 +184,6 @@
 		/>
 	</div>
 	<CommandPalette v-model="settingsStore.isCommandPaletteOpen" />
-	<PageModal
-		v-model="showPageModal"
-		v-model:reloadSidebar="sidebarSettings"
-		:page="pageToEdit"
-	/>
 </template>
 
 <script setup>
@@ -198,7 +193,6 @@ import { sessionStore } from '@/stores/session'
 import { useSidebar } from '@/stores/sidebar'
 import { useSettings } from '@/stores/settings'
 import { Button, call, createResource, Tooltip, toast } from 'frappe-ui'
-import PageModal from '@/components/Modals/PageModal.vue'
 import { capture } from '@/telemetry'
 import LMSLogo from '@/components/Icons/LMSLogo.vue'
 import { useRouter } from 'vue-router'
@@ -246,10 +240,8 @@ let sidebarStore = useSidebar()
 const socket = inject('$socket')
 const unreadCount = ref(0)
 const sidebarLinks = ref(null)
-const showPageModal = ref(false)
 const isModerator = ref(false)
 const isInstructor = ref(false)
-const pageToEdit = ref(null)
 const { sidebarSettings, activeTab, isSettingsOpen, programs } = useSettings()
 const settingsStore = useSettings()
 const showOnboarding = ref(false)
@@ -335,21 +327,6 @@ const updateUnreadCount = () => {
 				item.count = unreadCount.value || 0
 			}
 		})
-	})
-}
-
-const openPageModal = (link) => {
-	showPageModal.value = true
-	pageToEdit.value = link
-}
-
-const deletePage = (link) => {
-	call('lms.lms.api.delete_documents', {
-		doctype: 'LMS Sidebar Item',
-		documents: [link.name],
-	}).then(() => {
-		sidebarSettings.reload()
-		toast.success(__('Page deleted successfully'))
 	})
 }
 
@@ -578,7 +555,7 @@ const setUpOnboarding = () => {
 		onboardingDetails = useOnboarding('learning')
 		onboardingDetails.setUp(steps)
 		isOnboardingStepsCompleted = onboardingDetails.isOnboardingStepsCompleted
-		showOnboarding.value = true
+		showOnboarding.value = false
 	}
 }
 
