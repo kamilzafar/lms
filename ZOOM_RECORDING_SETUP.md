@@ -347,11 +347,39 @@ frappe.get_all("RQ Job",
 
 ## Security Notes
 
+### Webhook Security
+
 - **Webhook Secret Token** validates that requests are from Zoom (not spoofed)
 - Signature verification uses HMAC-SHA256
 - All API calls to Zoom use OAuth2 authentication
 - Recordings are downloaded securely via HTTPS
 - Files stored in Frappe's private file system by default
+
+### CSRF Exemption (Production-Safe)
+
+The webhook endpoint is **CSRF-exempt** to allow Zoom to send POST requests without CSRF tokens. This is safe because:
+
+1. **External Service**: Only Zoom calls this endpoint, not user browsers
+2. **Signature Verification**: Every webhook event (except validation) is verified using HMAC-SHA256
+3. **Guest Context**: The endpoint runs in guest context with no user permissions
+4. **Validation Handshake**: Zoom's validation uses plainToken/encryptedToken mechanism
+5. **Always HTTP 200**: Returns 200 OK for all requests (Zoom requirement), logs errors instead
+
+**Testing the endpoint**:
+```bash
+# Test endpoint accessibility (should return 200, not 403)
+curl -X POST https://yoursite.com/api/method/lms.lms.api.zoom_webhook \
+  -H "Content-Type: application/json" \
+  -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "test123"}}'
+
+# Expected response (HTTP 200):
+# {"plainToken": "test123", "encryptedToken": "...hash..."}
+```
+
+If you receive **403 Forbidden**, the CSRF exemption may not be working. Check:
+- Frappe version (v14+ recommended)
+- Error logs for middleware blocking
+- Site configuration for restrictive security settings
 
 ---
 

@@ -1957,7 +1957,7 @@ def get_upcoming_batches():
 	)
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True, methods=["POST", "OPTIONS"])
 def zoom_webhook():
 	"""
 	Webhook endpoint for Zoom cloud recording events.
@@ -1967,6 +1967,20 @@ def zoom_webhook():
 	"""
 	import hmac
 	import hashlib
+
+	# Handle OPTIONS preflight request (CORS)
+	if frappe.request.method == "OPTIONS":
+		frappe.local.response.http_status_code = 200
+		return {}
+
+	# CRITICAL: Explicitly disable CSRF for this webhook endpoint
+	# This is safe because we verify Zoom's webhook signature for all real events
+	if hasattr(frappe.local, "request"):
+		frappe.local.request.csrf_exempt = True
+
+	# Set guest session explicitly to ensure guest access
+	if frappe.session.user == "Administrator" or not frappe.session.user:
+		frappe.set_user("Guest")
 
 	try:
 		# 1. Parse webhook payload first
@@ -1980,6 +1994,7 @@ def zoom_webhook():
 
 			if not plain_token:
 				frappe.log_error("Missing plainToken in validation request", "Zoom Webhook Validation")
+				frappe.local.response.http_status_code = 200
 				return {"status": "error", "message": "Missing plainToken"}
 
 			# Get webhook secret - handle case where settings don't exist yet
@@ -2010,6 +2025,7 @@ def zoom_webhook():
 				hashlib.sha256
 			).hexdigest()
 
+			frappe.local.response.http_status_code = 200
 			return {
 				"plainToken": plain_token,
 				"encryptedToken": encrypted_token
@@ -2032,11 +2048,13 @@ def zoom_webhook():
 					"No webhook_secret_token configured. Cannot verify webhook signature.",
 					"Zoom Webhook Error"
 				)
+				frappe.local.response.http_status_code = 200
 				return {"status": "error", "message": "Webhook secret not configured"}
 
 			webhook_secret = zoom_settings[0].get("webhook_secret_token")
 		except Exception as e:
 			frappe.log_error(f"Error fetching Zoom settings: {str(e)}", "Zoom Webhook Error")
+			frappe.local.response.http_status_code = 200
 			return {"status": "error", "message": "Configuration error"}
 
 		# Verify signature
@@ -2045,6 +2063,7 @@ def zoom_webhook():
 				f"Invalid webhook signature. Headers: {dict(frappe.request.headers)}",
 				"Zoom Webhook Signature Verification Failed"
 			)
+			frappe.local.response.http_status_code = 200
 			return {"status": "error", "message": "Invalid signature"}
 
 		# 4. Handle recording completed event
@@ -2054,6 +2073,7 @@ def zoom_webhook():
 
 			if not meeting_uuid:
 				frappe.log_error("Missing meeting UUID in recording.completed event", "Zoom Webhook Error")
+				frappe.local.response.http_status_code = 200
 				return {"status": "error", "message": "Missing meeting UUID"}
 
 			# Queue background job (don't block webhook response)
@@ -2065,6 +2085,7 @@ def zoom_webhook():
 				timeout=1800  # 30 minutes
 			)
 
+			frappe.local.response.http_status_code = 200
 			return {"status": "success", "message": "Recording processing queued"}
 
 		# 5. Log unhandled events for debugging
@@ -2072,6 +2093,7 @@ def zoom_webhook():
 			f"Unhandled Zoom webhook event: {event}\nPayload: {json.dumps(payload, indent=2)}",
 			"Zoom Webhook Unhandled Event"
 		)
+		frappe.local.response.http_status_code = 200
 		return {"status": "success", "message": f"Event {event} received but not processed"}
 
 	except Exception as e:
@@ -2080,6 +2102,7 @@ def zoom_webhook():
 			f"Exception in zoom_webhook: {str(e)}\n{frappe.get_traceback()}",
 			"Zoom Webhook Exception"
 		)
+		frappe.local.response.http_status_code = 200
 		return {"status": "error", "message": "Internal error", "error": str(e)}
 
 

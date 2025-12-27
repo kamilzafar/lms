@@ -310,19 +310,35 @@ After setup, verify everything is working:
    ```
    Should show a token, not empty. If empty, go back to Part 3, Step 4.
 
-2. **Endpoint not accessible**
+2. **403 Forbidden Error**
+   The endpoint is CSRF-exempt for external webhooks. Test accessibility:
+   ```bash
+   # Test endpoint (should return HTTP 200, NOT 403)
+   curl -X POST https://yoursite.com/api/method/lms.lms.api.zoom_webhook \
+     -H "Content-Type: application/json" \
+     -d '{"event": "endpoint.url_validation", "payload": {"plainToken": "test"}}'
+   ```
+
+   Expected: HTTP 200 with JSON response
+
+   If you get 403:
+   - Check Frappe version (v14+ recommended)
+   - Review error logs: `bench --site yoursite.com logs`
+   - Verify site_config.json doesn't have restrictive CSRF settings
+
+3. **Endpoint not accessible**
    ```bash
    # Test from external server
    curl -X POST https://yoursite.com/api/method/lms.lms.api.zoom_webhook
    ```
    Should return HTTP 200, not timeout or error.
 
-3. **SSL certificate issue**
+4. **SSL certificate issue**
    - Zoom requires valid, trusted SSL
    - Self-signed certificates will fail
    - Use Let's Encrypt or commercial SSL
 
-4. **Wrong URL format**
+5. **Wrong URL format**
    - Must include `/api/method/` prefix
    - Must be HTTPS (not HTTP)
    - Correct: `https://site.com/api/method/lms.lms.api.zoom_webhook`
