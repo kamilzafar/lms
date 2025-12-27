@@ -127,6 +127,7 @@ declare module 'vue' {
     VideoBlock: typeof import('./src/components/VideoBlock.vue')['default']
     VideoStatistics: typeof import('./src/components/Modals/VideoStatistics.vue')['default']
     ZoomAccountModal: typeof import('./src/components/Modals/ZoomAccountModal.vue')['default']
+    ZoomRecordingPlayer: typeof import('./src/components/ZoomRecordingPlayer.vue')['default']
     ZoomSettings: typeof import('./src/components/Settings/ZoomSettings.vue')['default']
   }
 }

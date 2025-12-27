@@ -118,7 +118,7 @@ let liveClass = reactive({
 	time: '',
 	duration: '',
 	timezone: '',
-	auto_recording: 'No Recording',
+	auto_recording: 'Cloud',
 	batch: props.batch,
 	host: user.data.name,
 })
@@ -235,6 +235,6 @@ const refreshForm = () => {
 	liveClass.time = ''
 	liveClass.duration = ''
 	liveClass.timezone = getUserTimezone()
-	liveClass.auto_recording = 'No Recording'
+	liveClass.auto_recording = 'Cloud'
 }
 </script>

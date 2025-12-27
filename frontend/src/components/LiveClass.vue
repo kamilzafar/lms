@@ -48,14 +48,13 @@
 				<div class="flex items-center space-x-2">
 					<Calendar class="w-4 h-4 stroke-1.5" />
 					<span>
-						{{ dayjs(cls.date).format('DD MMMM YYYY') }}
+						{{ cls.date ? dayjs(cls.date).format('DD MMMM YYYY') : 'Date not set' }}
 					</span>
 				</div>
 				<div class="flex items-center space-x-2">
 					<Clock class="w-4 h-4 stroke-1.5" />
 					<span>
-						{{ dayjs(getClassStart(cls)).format('hh:mm A') }} -
-						{{ dayjs(getClassEnd(cls)).format('hh:mm A') }}
+						{{ cls.date && cls.time ? `${dayjs(getClassStart(cls)).format('hh:mm A')} - ${dayjs(getClassEnd(cls)).format('hh:mm A')}` : 'Time not set' }}
 					</span>
 				</div>
 				<div
@@ -175,6 +174,7 @@ const hasPermission = () => {
 }
 
 const canAccessClass = (cls) => {
+	if (!cls.date || !cls.time) return false
 	if (cls.date < dayjs().format('YYYY-MM-DD')) return false
 	if (cls.date > dayjs().format('YYYY-MM-DD')) return false
 	if (hasClassEnded(cls)) return false
@@ -182,15 +182,18 @@ const canAccessClass = (cls) => {
 }
 
 const getClassStart = (cls) => {
+	if (!cls.date || !cls.time) return new Date()
 	return new Date(`${cls.date}T${cls.time}`)
 }
 
 const getClassEnd = (cls) => {
+	if (!cls.date || !cls.time || !cls.duration) return new Date()
 	const classStart = getClassStart(cls)
 	return new Date(classStart.getTime() + cls.duration * 60000)
 }
 
 const hasClassEnded = (cls) => {
+	if (!cls.date || !cls.time || !cls.duration) return false
 	const classEnd = getClassEnd(cls)
 	const now = new Date()
 	return now > classEnd

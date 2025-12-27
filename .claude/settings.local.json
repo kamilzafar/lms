@@ -6,7 +6,12 @@
       "Bash(git checkout:*)",
       "Bash(python:*)",
       "Bash(npm run build)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(ls:*)",
+      "Bash(xargs:*)",
+      "Bash(python3:*)",
+      "Bash(yarn build)",
+      "Bash(yarn install)"
     ]
   }
 }

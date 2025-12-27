@@ -1,4 +1,5 @@
-import '../../../frappe/frappe/public/js/lib/posthog.js'
+// Posthog library will be loaded from Frappe at runtime
+// import '../../../frappe/frappe/public/js/lib/posthog.js'
 import { createResource } from 'frappe-ui'
 
 declare global {
@@ -21,7 +22,7 @@ interface CaptureOptions {
   }
 }
 
-let posthog: typeof window.posthog = window.posthog
+let posthog: typeof window.posthog = window.posthog || {} as any
 
 // Posthog Settings
 let posthogSettings = createResource({

@@ -7,7 +7,7 @@
 		<Dropdown
 			placement="start"
 			side="bottom"
-			v-if="canCreateCourse() && !isModerator"
+			v-if="canCreateCourse() && (user.data?.is_system_manager || !isModerator)"
 			:options="[
 				{
 					label: __('New Course'),
@@ -61,7 +61,7 @@
 			>
 				<TabButtons :buttons="courseTabs" v-model="currentTab" class="w-fit" />
 
-				<div v-if="!isLMSStudent && !isModerator" class="grid grid-cols-2 gap-2">
+				<div v-if="user.data?.is_system_manager || (!isLMSStudent && !isModerator)" class="grid grid-cols-2 gap-2">
 					<FormControl
 						v-model="title"
 						:placeholder="__('Search by Title')"
@@ -81,7 +81,7 @@
 				</div>
 
 				<FormControl
-					v-if="!isLMSStudent && !isModerator"
+					v-if="user.data?.is_system_manager || (!isLMSStudent && !isModerator)"
 					v-model="certification"
 					:label="__('Certification')"
 					type="checkbox"
@@ -162,7 +162,9 @@ const currentTab = ref('Live')
 
 onMounted(() => {
 	// Set default tab based on role after user data is available
-	if (isLMSStudent.value) {
+	if (user.data?.is_system_manager) {
+		currentTab.value = 'Live'  // Administrator defaults to Live tab
+	} else if (isLMSStudent.value) {
 		currentTab.value = 'Enrolled'
 	} else if (isModerator.value) {
 		currentTab.value = 'Teacher of'
@@ -360,6 +362,33 @@ watch(currentTab, () => {
 })
 
 const courseTabs = computed(() => {
+	// Administrator sees ALL tabs
+	if (user.data?.is_system_manager) {
+		return [
+			{
+				label: __('Live'),
+			},
+			{
+				label: __('New'),
+			},
+			{
+				label: __('Upcoming'),
+			},
+			{
+				label: __('Enrolled'),
+			},
+			{
+				label: __('Created'),
+			},
+			{
+				label: __('Unpublished'),
+			},
+			{
+				label: __('Teacher of'),
+			},
+		]
+	}
+
 	// Teachers see only "Teacher of" tab
 	if (isModerator.value) {
 		return [

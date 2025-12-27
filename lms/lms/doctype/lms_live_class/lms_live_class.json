@@ -139,7 +139,7 @@
    "options": "Course Lesson"
   },
   {
-   "default": "No Recording",
+   "default": "Cloud",
    "fieldname": "auto_recording",
    "fieldtype": "Select",
    "label": "Auto Recording",

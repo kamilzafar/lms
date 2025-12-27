@@ -314,10 +314,13 @@ const isModerator = computed(() => user.data?.is_moderator)
 const isInstructor = computed(() => user.data?.is_instructor)
 ```
 
-**Recent customizations** (frontend-only, backend unchanged):
-1. **Courses page** (`/frontend/src/pages/Courses.vue`):
-   - LMS Students: See only "Enrolled" and "Live" tabs, no filters
-   - Teachers/Moderators: See only "Teacher of" tab, no Create button
+**Role-based UI filtering** (frontend-only, backend unchanged):
+
+1. **Courses page** (`/frontend/src/pages/Courses.vue` lines 362-433):
+   - **Administrator** (`is_system_manager`): Sees ALL tabs (Live, New, Upcoming, Enrolled, Created, Unpublished, Teacher of) + all filters + Create button
+   - **LMS Students**: See only "Enrolled" and "Live" tabs, no filters, no Create button
+   - **Teachers/Moderators**: See only "Teacher of" tab, no filters, no Create button
+   - **Instructors/Evaluators**: See full tab list with Create/Unpublished tabs
 
 2. **Sidebar** (`/frontend/src/components/Sidebar/AppSidebar.vue`):
    - Statistics hidden from Students & Teachers
@@ -325,6 +328,8 @@ const isInstructor = computed(() => user.data?.is_instructor)
 
 3. **Role display mapping** (`/frontend/src/components/Settings/Members.vue:227`):
    - Backend role "Moderator" displays as "Teacher" in UI
+
+**Important**: Administrator role check should always come **first** in role-based conditionals to prevent being treated as other roles.
 
 ---
 
@@ -375,24 +380,45 @@ const isInstructor = computed(() => user.data?.is_instructor)
 - Fetches participant data from Zoom API
 - Creates `LMS Live Class Participant` records
 
-### Recording Auto-Upload (NEW)
+### Recording System (Metadata-Only Architecture)
 **Webhook endpoint**: `/api/method/lms.lms.api.zoom_webhook`
 
+**Important**: The system stores only **metadata**, not video files. Recordings remain in Zoom Cloud and are streamed via Zoom's CDN.
+
 **Flow**:
-1. Teacher ends meeting with cloud recording enabled
+1. Teacher ends meeting with cloud recording enabled (default: "Cloud")
 2. Zoom processes recording (5-60 min)
-3. Zoom sends `recording.completed` webhook
-4. System downloads MP4, uploads to Frappe File
-5. Adds EditorJS video block to lesson content
-6. Marks `recording_processed = 1` in Live Class
+3. Zoom sends `recording.completed` webhook with HMAC-SHA256 signature
+4. System verifies signature, extracts metadata only (duration, file size, recording ID, passcode)
+5. Stores metadata in `LMS Live Class` DocType
+6. Marks `recording_processed = 1`
+
+**Playback Flow**:
+1. Student clicks "Watch Recording" on lesson page
+2. Frontend calls `lms.lms.api.get_zoom_recording_playback(live_class_name)`
+3. Backend verifies student enrollment in batch
+4. Fetches fresh `play_url` from Zoom API (valid for limited time)
+5. Returns URL + passcode to frontend
+6. Frontend embeds Zoom player in iframe
 
 **Files**:
-- Webhook handler: `/lms/lms/api.py` (`zoom_webhook()`, `verify_zoom_signature()`)
-- Processor: `/lms/lms/doctype/lms_live_class/lms_live_class.py` (`process_zoom_recording()`)
-- New fields in `LMS Zoom Settings`: `webhook_secret_token`
-- New fields in `LMS Live Class`: `recording_processed`, `recording_file`, `recording_url`
+- Webhook handler: `/lms/lms/api.py` (`zoom_webhook()` lines 1960-2154, `verify_zoom_signature()` lines 2156-2180)
+- Metadata processor: `/lms/lms/doctype/lms_live_class/lms_live_class.py` (`process_zoom_recording()` lines 168-296)
+- Playback API: `/lms/lms/api.py` (`get_zoom_recording_playback()` lines 2184-2340)
+- Frontend player: `/frontend/src/components/ZoomRecordingPlayer.vue`
 
-**Configuration**: Set webhook URL in Zoom App to `https://yoursite.com/api/method/lms.lms.api.zoom_webhook`
+**Fields in `LMS Live Class`**:
+- `recording_processed` (Check) - Whether metadata has been extracted
+- `zoom_recording_id` (Data) - Zoom recording file ID for API retrieval
+- `recording_passcode` (Password) - Passcode for Zoom cloud recording access (encrypted)
+- `recording_url` (Data) - Zoom play_url (metadata only, fetched on-demand)
+- `recording_duration` (Int) - Duration in seconds
+- `recording_file_size` (Int) - Size in bytes
+
+**Configuration**:
+- Set webhook URL in Zoom App to `https://yoursite.com/api/method/lms.lms.api.zoom_webhook`
+- Add `webhook_secret_token` to `LMS Zoom Settings` for signature verification
+- Default `auto_recording` = "Cloud" (set in DocType JSON and frontend modal)
 
 ---
 
@@ -607,11 +633,23 @@ console.log('Debug:', data)
 **Build not reflecting**:
 - Clear cache: `bench --site sitename clear-cache`
 - Hard refresh browser: Ctrl+Shift+R
+- Verify build timestamp: `ls -la lms/public/frontend/`
+
+**Frontend build fails**:
+- If `socket.js` import error: File uses default port 8000 (hardcoded, no config import needed)
+- If `telemetry.ts` import error: Posthog library loaded from Frappe at runtime (import commented out)
+- Run `yarn install` to ensure dependencies are installed
 
 **Webhook not working**:
 - Check `bench worker` is running
 - Verify webhook secret in LMS Zoom Settings
 - Check Error Log for signature validation failures
+- Verify webhook URL matches: `/api/method/lms.lms.api.zoom_webhook`
+
+**"Invalid Date" errors in Live Class cards**:
+- Ensure date/time fields have null checks before dayjs formatting
+- Example: `cls.date ? dayjs(cls.date).format('DD MMMM YYYY') : 'Date not set'`
+- Helper functions should return safe defaults when data is missing
 
 ---
 
@@ -628,9 +666,11 @@ console.log('Debug:', data)
 **Current customizations** (frontend-only, easily reversible):
 - Onboarding disabled
 - Website builder hidden
-- Role-based Courses page filtering
+- Role-based Courses page filtering (Administrator sees all tabs)
 - "Moderator" → "Teacher" display text
 - Zensbot branding
+- Default Live Class recording: "Cloud" (backend + frontend)
+- Date validation with null safety in Live Class components
 
 ---
 
@@ -647,8 +687,11 @@ console.log('Debug:', data)
 
 ### Zoom
 - Server-to-Server OAuth (no user interaction)
-- Recording webhooks for auto-upload
+- Recording webhooks with HMAC-SHA256 signature verification
+- Metadata-only storage (videos stay in Zoom Cloud, streamed via CDN)
+- Access control: Batch enrollment verification for playback
 - Configuration: `LMS Zoom Settings` DocType (multiple accounts supported)
+- Default recording mode: "Cloud" (auto-enabled for all new Live Classes)
 
 ---
 
@@ -670,6 +713,107 @@ console.log('Debug:', data)
 
 ---
 
+## Critical Patterns & Best Practices
+
+### Date/Time Handling in Frontend
+
+Always add null checks before formatting dates with dayjs:
+
+```vue
+<!-- BAD - Will show "Invalid Date" if data is missing -->
+<span>{{ dayjs(cls.date).format('DD MMMM YYYY') }}</span>
+
+<!-- GOOD - Safe with fallback -->
+<span>{{ cls.date ? dayjs(cls.date).format('DD MMMM YYYY') : 'Date not set' }}</span>
+```
+
+In helper functions, return safe defaults:
+
+```javascript
+// BAD - Crashes if date/time are null
+const getClassStart = (cls) => {
+    return new Date(`${cls.date}T${cls.time}`)
+}
+
+// GOOD - Returns safe default
+const getClassStart = (cls) => {
+    if (!cls.date || !cls.time) return new Date()
+    return new Date(`${cls.date}T${cls.time}`)
+}
+```
+
+### Role-Based UI Conditionals
+
+Always check Administrator **first** to prevent role conflicts:
+
+```javascript
+// GOOD - Administrator check comes first
+const courseTabs = computed(() => {
+    if (user.data?.is_system_manager) {
+        return [...allTabs]  // Administrator sees everything
+    }
+    if (isModerator.value) {
+        return [...limitedTabs]  // Moderators see subset
+    }
+    // ...other roles
+})
+
+// BAD - Administrator might be caught by Moderator check
+const courseTabs = computed(() => {
+    if (isModerator.value) {  // Administrator might also be Moderator!
+        return [...limitedTabs]
+    }
+    if (user.data?.is_system_manager) {
+        return [...allTabs]  // Never reached if also Moderator
+    }
+})
+```
+
+### Build Process Resilience
+
+Frontend build should not depend on Frappe runtime files:
+
+```javascript
+// BAD - Breaks build if Frappe not running
+import { socketio_port } from '../../../../sites/common_site_config.json'
+
+// GOOD - Uses default, loads config at runtime if needed
+let socketio_port = 8000  // Default
+// Config loaded dynamically at runtime via window variables
+```
+
+### Webhook Security
+
+Always verify webhook signatures before processing:
+
+```python
+# CRITICAL - Verify before processing
+if not verify_zoom_signature(request_body, signature, secret_token):
+    frappe.log_error("Invalid Zoom webhook signature")
+    return {"status": "error", "message": "Invalid signature"}
+
+# Only process if signature is valid
+process_webhook_data(payload)
+```
+
+### Scalability Patterns
+
+**Multiple Recordings per Course**: Use separate lessons, not multiple Live Classes per lesson
+
+```
+✅ GOOD:
+Course → Lesson 1 → Live Class 1
+Course → Lesson 2 → Live Class 2
+Course → Lesson 3 → Live Class 3
+
+❌ AVOID:
+Course → Lesson 1 → Live Class 1, 2, 3  (only 1 shows in UI)
+```
+
+**Reason**: Current UI (`lms/lms/utils.py` line 1027) uses `get_value()` which returns only one record. For multiple sessions, create separate lessons.
+
+---
+
 ## Support Resources
 
 - **Frappe Docs**: https://frappeframework.com/docs
@@ -680,4 +824,4 @@ console.log('Debug:', data)
 
 ---
 
-*Last updated: December 27, 2024*
+*Last updated: December 28, 2024*
