@@ -1,0 +1,21 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Frappe LMS{% endblock %}
+
+{% block page_content %}
+<div class="text-center p-8">
+	<h1>Frappe Learning Management System</h1>
+	<p class="mt-4 text-gray-600">Loading LMS...</p>
+	<div id="app" class="mt-8"></div>
+</div>
+
+<link rel="stylesheet" href="/assets/frappe/dist/css/website.bundle.IW6P2XQU.css">
+<script src="/assets/frappe/dist/js/frappe-web.bundle.PC22MWJB.js"></script>
+
+<script>
+frappe.ready(function() {
+	// Try to load the LMS desktop interface
+	window.location.href = '/app/lms';
+});
+</script>
+{% endblock %}
