@@ -148,7 +148,9 @@ onMounted(() => {
 	const isStudent = user.data && 
 		!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
 	const isInstructorOrModerator = user.data && 
-		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator) &&
+		!user.data?.is_system_manager
+	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
 		// Students can only access Enrolled and Live tabs
@@ -163,6 +165,11 @@ onMounted(() => {
 		// Instructors/moderators can only access Created tab
 		if (currentTab.value !== 'Created') {
 			currentTab.value = 'Created'
+		}
+	} else if (isAdmin) {
+		// Admins default to All tab
+		if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
+			currentTab.value = 'All'
 		}
 	}
 	
@@ -283,7 +290,12 @@ const updateTabFilter = () => {
 	delete filters.value['published_on']
 	delete filters.value['upcoming']
 
-	if (currentTab.value == 'Enrolled' && user.data?.is_student) {
+	if (currentTab.value == 'All') {
+		// All tab - show all courses without filters (only for admins)
+		delete filters.value['published']
+		delete filters.value['enrolled']
+		delete filters.value['upcoming']
+	} else if (currentTab.value == 'Enrolled' && user.data?.is_student) {
 		filters.value['enrolled'] = 1
 		delete filters.value['published']
 	} else if (currentTab.value == 'Created') {
@@ -364,6 +376,7 @@ const courseTabs = computed(() => {
 	// Check if user is a student (not moderator, instructor, or evaluator)
 	const isStudent = user.data && 
 		!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
 		// Students only see Enrolled and Live tabs
@@ -373,6 +386,30 @@ const courseTabs = computed(() => {
 			},
 			{
 				label: __('Live'),
+			},
+		]
+	}
+	
+	// For admins (System Managers) - show all tabs
+	if (isAdmin) {
+		return [
+			{
+				label: __('All'),
+			},
+			{
+				label: __('Live'),
+			},
+			{
+				label: __('New'),
+			},
+			{
+				label: __('Upcoming'),
+			},
+			{
+				label: __('Created'),
+			},
+			{
+				label: __('Unpublished'),
 			},
 		]
 	}
