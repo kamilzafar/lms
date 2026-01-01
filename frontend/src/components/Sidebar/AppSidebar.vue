@@ -132,13 +132,13 @@
 							</div>
 						</template>
 					</Tooltip>
-					<Tooltip :text="__('Powered by Learning')">
+					<Tooltip :text="__('Powered by Zensbot')">
 						<Zap
 							class="size-4 stroke-1.5 text-ink-gray-7 cursor-pointer"
 							@click="redirectToWebsite()"
 						/>
 					</Tooltip>
-					<Tooltip v-if="showOnboarding" :text="__('Help')">
+					<!-- <Tooltip v-if="showOnboarding" :text="__('Help')">
 						<CircleHelp
 							class="size-4 stroke-1.5 text-ink-gray-7 cursor-pointer"
 							@click="
@@ -148,7 +148,7 @@
 								}
 							"
 						/>
-					</Tooltip>
+					</Tooltip> -->
 				</div>
 				<Tooltip
 					:text="
@@ -595,7 +595,7 @@ watch(userResource, async () => {
 })
 
 const redirectToWebsite = () => {
-	window.open('https://frappe.io/learning', '_blank')
+	window.open('https://zensbot.com', '_blank')
 }
 
 onUnmounted(() => {

@@ -5186,7 +5186,7 @@ msgid "Postal Code"
 msgstr "รหัสไปรษณีย์"
 
 #: frontend/src/components/Sidebar/AppSidebar.vue:135
-msgid "Powered by Learning"
+msgid "Powered by Zensbot"
 msgstr ""
 
 #. Name of a DocType

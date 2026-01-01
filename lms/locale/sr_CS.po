@@ -5183,8 +5183,8 @@ msgid "Postal Code"
 msgstr "Poštanski broj"
 
 #: frontend/src/components/Sidebar/AppSidebar.vue:135
-msgid "Powered by Learning"
-msgstr "Powered by Learning"
+msgid "Powered by Zensbot"
+msgstr "Powered by Zensbot"
 
 #. Name of a DocType
 #: lms/lms/doctype/preferred_function/preferred_function.json

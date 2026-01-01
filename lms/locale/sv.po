@@ -5183,7 +5183,7 @@ msgid "Postal Code"
 msgstr "Postnummer"
 
 #: frontend/src/components/Sidebar/AppSidebar.vue:135
-msgid "Powered by Learning"
+msgid "Powered by Zensbot"
 msgstr "Drivs av Lärande"
 
 #. Name of a DocType
