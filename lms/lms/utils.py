@@ -757,6 +757,54 @@ def update_course_filters(filters):
 	or_filters = {}
 	show_featured = False
 
+	# Filter courses by creator for instructors and moderators
+	# They should only see courses they created
+	# Students should only see enrolled courses and live courses
+	if frappe.session.user and frappe.session.user != "Guest":
+		roles = frappe.get_roles(frappe.session.user)
+		is_instructor = "Course Creator" in roles
+		is_moderator = "Moderator" in roles
+		is_evaluator = "Batch Evaluator" in roles
+		is_system_manager = "System Manager" in roles
+		
+		# Check if user is a student (not instructor, moderator, evaluator, or system manager)
+		is_student = not (is_instructor or is_moderator or is_evaluator or is_system_manager)
+		
+		# Apply filter for instructors and moderators (but not system managers)
+		if (is_instructor or is_moderator) and not is_system_manager:
+			created_courses = frappe.get_all(
+				"Course Instructor", {"instructor": frappe.session.user}, pluck="parent"
+			)
+			if created_courses:
+				filters.update({"name": ["in", created_courses]})
+			else:
+				# If they have no courses, return empty result
+				filters.update({"name": ["in", []]})
+		
+		# Apply filter for students: only enrolled courses and live courses
+		# (unless "enrolled" filter is explicitly set, which will override this)
+		elif is_student and not filters.get("enrolled"):
+			# Get enrolled courses
+			enrolled_courses = frappe.get_all(
+				"LMS Enrollment", {"member": frappe.session.user}, pluck="course"
+			)
+			
+			# Get live courses (published=1, upcoming=0)
+			live_courses = frappe.get_all(
+				"LMS Course",
+				{"published": 1, "upcoming": 0},
+				pluck="name"
+			)
+			
+			# Combine enrolled and live courses (remove duplicates)
+			allowed_courses = list(set(enrolled_courses + live_courses))
+			
+			if allowed_courses:
+				filters.update({"name": ["in", allowed_courses]})
+			else:
+				# If no courses match, return empty result
+				filters.update({"name": ["in", []]})
+
 	if filters.get("title"):
 		or_filters = get_course_or_filters(filters)
 		del filters["title"]

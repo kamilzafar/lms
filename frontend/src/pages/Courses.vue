@@ -144,6 +144,28 @@ const { brand } = sessionStore()
 const courseCount = ref(0)
 
 onMounted(() => {
+	// Set default tab based on user role
+	const isStudent = user.data && 
+		!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	const isInstructorOrModerator = user.data && 
+		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	
+	if (isStudent) {
+		// Students can only access Enrolled and Live tabs
+		const validStudentTabs = ['Enrolled', 'Live']
+		if (!validStudentTabs.includes(currentTab.value)) {
+			currentTab.value = 'Enrolled'
+		} else if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
+			// Default to Enrolled if no tab specified
+			currentTab.value = 'Enrolled'
+		}
+	} else if (isInstructorOrModerator) {
+		// Instructors/moderators can only access Created tab
+		if (currentTab.value !== 'Created') {
+			currentTab.value = 'Created'
+		}
+	}
+	
 	setFiltersFromQuery()
 	updateCourses()
 	getCourseCount()
@@ -264,6 +286,11 @@ const updateTabFilter = () => {
 	if (currentTab.value == 'Enrolled' && user.data?.is_student) {
 		filters.value['enrolled'] = 1
 		delete filters.value['published']
+	} else if (currentTab.value == 'Created') {
+		// For instructors/moderators, show all their created courses
+		filters.value['created'] = 1
+		delete filters.value['published']
+		delete filters.value['enrolled']
 	} else {
 		delete filters.value['published']
 		delete filters.value['enrolled']
@@ -280,8 +307,6 @@ const updateTabFilter = () => {
 				'>=',
 				dayjs().add(-3, 'month').format('YYYY-MM-DD'),
 			]
-		} else if (currentTab.value == 'Created') {
-			filters.value['created'] = 1
 		} else if (currentTab.value == 'Unpublished') {
 			filters.value['published'] = 0
 		}
@@ -336,28 +361,41 @@ watch(currentTab, () => {
 })
 
 const courseTabs = computed(() => {
-	let tabs = [
-		{
-			label: __('Live'),
-		},
-		{
-			label: __('New'),
-		},
-		{
-			label: __('Upcoming'),
-		},
-	]
+	// Check if user is a student (not moderator, instructor, or evaluator)
+	const isStudent = user.data && 
+		!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	
+	if (isStudent) {
+		// Students only see Enrolled and Live tabs
+		return [
+			{
+				label: __('Enrolled'),
+			},
+			{
+				label: __('Live'),
+			},
+		]
+	}
+	
+	// For instructors, moderators, and evaluators - only show Created tab
 	if (
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
 		user.data?.is_evaluator
 	) {
-		tabs.push({ label: __('Created') })
-		tabs.push({ label: __('Unpublished') })
-	} else if (user.data) {
-		tabs.push({ label: __('Enrolled') })
+		return [
+			{
+				label: __('Created'),
+			},
+		]
 	}
-	return tabs
+	
+	// Fallback (should not reach here for logged-in users)
+	return [
+		{
+			label: __('Live'),
+		},
+	]
 })
 
 const breadcrumbs = computed(() => [
