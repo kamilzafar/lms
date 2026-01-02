@@ -429,7 +429,7 @@ watch(currentTab, () => {
 		// Load recorded lectures when Recorded tab is selected
 		recordedLectures.reload()
 	} else {
-		updateCourses()
+	updateCourses()
 	}
 })
 
@@ -465,15 +465,15 @@ const courseTabs = computed(() => {
 			{
 				label: __('All'),
 			},
-			{
-				label: __('Live'),
-			},
-			{
-				label: __('New'),
-			},
-			{
-				label: __('Upcoming'),
-			},
+		{
+			label: __('Live'),
+		},
+		{
+			label: __('New'),
+		},
+		{
+			label: __('Upcoming'),
+		},
 			{
 				label: __('Created'),
 			},

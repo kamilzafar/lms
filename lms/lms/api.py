@@ -1935,7 +1935,6 @@ def get_recorded_lectures(course_name=None):
 
 
 @frappe.whitelist()
-@frappe.rate_limit(limit_by="user", limit=10, window=60)
 def get_recording_embed_url(live_class):
 	"""
 	Get secure token for recording access (doesn't expose actual Zoom URL to frontend).
@@ -2015,7 +2014,6 @@ def get_recording_embed_url(live_class):
 
 
 @frappe.whitelist(allow_guest=True)
-@frappe.rate_limit(limit_by="user", limit=30, window=60)
 def get_recording_secure(token, live_class):
 	"""
 	Secure backend proxy for recording embed.
