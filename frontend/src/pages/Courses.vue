@@ -429,7 +429,7 @@ watch(currentTab, () => {
 		// Load recorded lectures when Recorded tab is selected
 		recordedLectures.reload()
 	} else {
-	updateCourses()
+		updateCourses()
 	}
 })
 
