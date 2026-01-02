@@ -189,6 +189,7 @@ const showRecordingModal = ref(false)
 const currentRecording = ref(null)
 
 const recordedLectures = createListResource({
+	doctype: 'LMS Live Class',
 	url: 'lms.lms.api.get_recorded_lectures',
 	auto: false,
 })
@@ -441,7 +442,7 @@ const openRecordingModal = (lecture) => {
 const courseTabs = computed(() => {
 	// Check if user is a student (not moderator, instructor, or evaluator)
 	const isStudent = user.data && 
-		!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
 	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
@@ -465,15 +466,15 @@ const courseTabs = computed(() => {
 			{
 				label: __('All'),
 			},
-		{
-			label: __('Live'),
-		},
-		{
-			label: __('New'),
-		},
-		{
-			label: __('Upcoming'),
-		},
+			{
+				label: __('Live'),
+			},
+			{
+				label: __('New'),
+			},
+			{
+				label: __('Upcoming'),
+			},
 			{
 				label: __('Created'),
 			},
