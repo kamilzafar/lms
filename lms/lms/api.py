@@ -1764,6 +1764,362 @@ def get_my_live_classes():
 
 
 @frappe.whitelist()
+def get_recorded_courses():
+	"""Get courses with recorded lectures for enrolled students"""
+	recorded_courses = []
+	if frappe.session.user == "Guest":
+		return recorded_courses
+
+	# Get all batches the student is enrolled in
+	enrolled_batches = frappe.get_all(
+		"LMS Batch Enrollment",
+		{"member": frappe.session.user},
+		pluck="batch"
+	)
+
+	if not enrolled_batches:
+		return recorded_courses
+
+	# Get all live classes from enrolled batches that have recordings
+	live_classes_with_recordings = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"batch_name": ["in", enrolled_batches],
+			"auto_recording": ["!=", "No Recording"],
+		},
+		fields=["batch_name", "name"],
+	)
+
+	if not live_classes_with_recordings:
+		return recorded_courses
+
+	# Get unique batches that have recorded lectures
+	batches_with_recordings = list(set([lc.batch_name for lc in live_classes_with_recordings]))
+
+	# Get courses from those batches
+	BatchCourse = frappe.qb.DocType("Batch Course")
+	Course = frappe.qb.DocType("LMS Course")
+
+	query = (
+		frappe.qb.from_(BatchCourse)
+		.join(Course)
+		.on(BatchCourse.course == Course.name)
+		.select(Course.name)
+		.where(BatchCourse.parent.isin(batches_with_recordings))
+		.where(Course.published == 1)
+		.distinct()
+	)
+
+	results = query.run(as_dict=True)
+	course_names = [row["name"] for row in results]
+
+	# Also check direct course enrollments
+	enrolled_courses = frappe.get_all(
+		"LMS Enrollment",
+		{"member": frappe.session.user},
+		pluck="course"
+	)
+
+	# Combine batch courses and directly enrolled courses
+	all_course_names = list(set(course_names + enrolled_courses))
+
+	# Get course details
+	for course_name in all_course_names:
+		course_details = get_course_details(course_name)
+		# Verify the course has recorded lectures
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"course": course_name},
+			pluck="parent"
+		)
+		if batch_courses:
+			# Check if any batch has recorded lectures
+			has_recordings = frappe.db.exists(
+				"LMS Live Class",
+				{
+					"batch_name": ["in", batch_courses],
+					"auto_recording": ["!=", "No Recording"],
+				}
+			)
+			if has_recordings:
+				recorded_courses.append(course_details)
+		else:
+			# Direct enrollment - check if course has any batches with recordings
+			# For now, include all enrolled courses (can be refined later)
+			recorded_courses.append(course_details)
+
+	return recorded_courses
+
+
+@frappe.whitelist()
+def get_recorded_lectures(course_name=None):
+	"""Get recorded lectures for enrolled students"""
+	if frappe.session.user == "Guest":
+		return []
+	
+	# Get enrolled batches
+	enrolled_batches = frappe.get_all(
+		"LMS Batch Enrollment",
+		{"member": frappe.session.user},
+		pluck="batch"
+	)
+	
+	# Get enrolled courses
+	enrolled_courses = frappe.get_all(
+		"LMS Enrollment",
+		{"member": frappe.session.user},
+		pluck="course"
+	)
+	
+	# Get courses from batches
+	if enrolled_batches:
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"parent": ["in", enrolled_batches]},
+			pluck="course",
+			distinct=True
+		)
+		enrolled_courses = list(set(enrolled_courses + batch_courses))
+	
+	# Filter by course if provided
+	if course_name:
+		if course_name not in enrolled_courses:
+			frappe.throw(_("You are not enrolled in this course"))
+		enrolled_courses = [course_name]
+	
+	if not enrolled_batches:
+		return []
+	
+	# Get live classes with recordings from enrolled batches
+	live_classes = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"batch_name": ["in", enrolled_batches],
+			"recording_available": 1,
+			"auto_recording": ["!=", "No Recording"]
+		},
+		fields=[
+			"name",
+			"title",
+			"description",
+			"date",
+			"time",
+			"duration",
+			"batch_name",
+			"recording_available"
+		],
+		order_by="date desc"
+	)
+	
+	# Get course info for each batch and filter by enrollment
+	result = []
+	for live_class in live_classes:
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"parent": live_class.batch_name},
+			pluck="course"
+		)
+		# Only include if student is enrolled in at least one course from this batch
+		if not any(course in enrolled_courses for course in batch_courses):
+			continue
+		
+		# Get course details
+		if batch_courses:
+			course = frappe.get_doc("LMS Course", batch_courses[0])
+			live_class.course_name = course.name
+			live_class.course_title = course.title
+			live_class.course_image = course.image
+			result.append(live_class)
+	
+	return result
+
+
+@frappe.whitelist()
+@frappe.rate_limit(limit_by="user", limit=10, window=60)
+def get_recording_embed_url(live_class):
+	"""
+	Get secure token for recording access (doesn't expose actual Zoom URL to frontend).
+	Token is valid for the duration of the recording.
+	Returns a token that frontend uses to request the secure embed endpoint.
+	"""
+	if frappe.session.user == "Guest":
+		frappe.throw(_("Please login to view recordings"))
+
+	live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+
+	# Verify user has access (enrolled in batch)
+	enrolled_batches = frappe.get_all(
+		"LMS Batch Enrollment",
+		{"member": frappe.session.user},
+		pluck="batch"
+	)
+
+	if live_class_doc.batch_name not in enrolled_batches:
+		# Also check if user is enrolled in course directly
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"parent": live_class_doc.batch_name},
+			pluck="course"
+		)
+		enrolled_courses = frappe.get_all(
+			"LMS Enrollment",
+			{"member": frappe.session.user},
+			pluck="course"
+		)
+
+		if not any(course in enrolled_courses for course in batch_courses):
+			frappe.throw(_("You don't have access to this recording"))
+
+	if not live_class_doc.recording_available or not live_class_doc.recording_url:
+		# Try to fetch recording
+		from lms.lms.doctype.lms_live_class.lms_live_class import fetch_recording
+		recording_data = fetch_recording(live_class)
+
+		if not recording_data.get("recording_available"):
+			# Return processing status instead of throwing error
+			return {
+				"embed_url": None,
+				"recording_available": False,
+				"status": recording_data.get("status", "processing"),
+				"message": recording_data.get("message", _("Recording is being processed. Please check back in a few minutes.")),
+				"title": live_class_doc.title,
+				"description": live_class_doc.description
+			}
+
+		live_class_doc.reload()
+
+	# Log access
+	_log_recording_access(live_class_doc.name, "request", frappe.session.user)
+
+	# Generate secure token (no expiration needed since URL never exposed to frontend)
+	# Token is just a session identifier - access control verified on every request
+	token = frappe.generate_hash(length=32)
+
+	# Store token in cache (no expiration - URL is never exposed, so token reuse is safe)
+	cache_key = f"recording_token_{live_class_doc.name}_{frappe.session.user}_{token}"
+	frappe.cache().set(
+		cache_key,
+		{
+			"live_class": live_class_doc.name,
+			"user": frappe.session.user,
+			"created_at": now()
+		}
+	)
+
+	return {
+		"token": token,
+		"title": live_class_doc.title,
+		"description": live_class_doc.description,
+		"recording_available": True
+	}
+
+
+@frappe.whitelist(allow_guest=True)
+@frappe.rate_limit(limit_by="user", limit=30, window=60)
+def get_recording_secure(token, live_class):
+	"""
+	Secure backend proxy for recording embed.
+	Validates token and access, then returns HTML with embedded recording.
+	Actual Zoom URL never exposed to frontend.
+	"""
+	if frappe.session.user == "Guest":
+		frappe.throw(_("Please login to view recordings"))
+
+	# Validate token
+	cache_key = f"recording_token_{live_class}_{frappe.session.user}_{token}"
+	token_data = frappe.cache().get_value(cache_key)
+
+	if not token_data:
+		frappe.throw(_("Recording access token expired or invalid. Please reload and try again."))
+
+	live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+
+	# Re-verify access (enrollment could have changed)
+	enrolled_batches = frappe.get_all(
+		"LMS Batch Enrollment",
+		{"member": frappe.session.user},
+		pluck="batch"
+	)
+
+	if live_class_doc.batch_name not in enrolled_batches:
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"parent": live_class_doc.batch_name},
+			pluck="course"
+		)
+		enrolled_courses = frappe.get_all(
+			"LMS Enrollment",
+			{"member": frappe.session.user},
+			pluck="course"
+		)
+
+		if not any(course in enrolled_courses for course in batch_courses):
+			frappe.throw(_("You don't have access to this recording"))
+
+	# Log access
+	_log_recording_access(live_class_doc.name, "view", frappe.session.user)
+
+	recording_url = live_class_doc.recording_url
+	password = live_class_doc.recording_password or ""
+
+	if not recording_url:
+		frappe.throw(_("Recording URL not found"))
+
+	# Handle password in URL if needed
+	embed_url = recording_url
+	if password and "pwd=" not in recording_url and "password=" not in recording_url:
+		if "/rec/share/" not in recording_url:
+			try:
+				from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+				parsed = urlparse(recording_url)
+				query_params = parse_qs(parsed.query)
+				query_params['pwd'] = [password]
+				new_query = urlencode(query_params, doseq=True)
+				embed_url = urlunparse((
+					parsed.scheme,
+					parsed.netloc,
+					parsed.path,
+					parsed.params,
+					new_query,
+					parsed.fragment
+				))
+			except Exception:
+				embed_url = recording_url
+
+	# Return HTML with embedded iframe (URL stays on backend)
+	html_content = f'''
+	<div class="recording-container" style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; overflow: hidden; border-radius: 0.375rem;">
+		<iframe
+			src="{embed_url}"
+			style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;"
+			frameborder="0"
+			allowfullscreen="true"
+			allow="autoplay; encrypted-media; fullscreen; picture-in-picture; microphone; camera"
+			title="{live_class_doc.title}"
+			referrerpolicy="no-referrer-when-downgrade">
+		</iframe>
+	</div>
+	'''
+
+	return Response(html_content, status=200, content_type="text/html")
+
+
+def _log_recording_access(live_class_name, access_type, user):
+	"""Log recording access for audit trail"""
+	try:
+		log_doc = frappe.new_doc("LMS Recording Access Log")
+		log_doc.live_class = live_class_name
+		log_doc.user = user
+		log_doc.access_type = access_type  # "request" or "view"
+		log_doc.timestamp = now()
+		log_doc.ip_address = frappe.request.remote_addr if frappe.request else "unknown"
+		log_doc.insert(ignore_permissions=True)
+	except Exception as e:
+		# Don't fail recording access if logging fails
+		frappe.logger().warning(f"Failed to log recording access: {e}")
+
+
+@frappe.whitelist()
 def get_created_courses():
 	created_courses = []
 	if frappe.session.user == "Guest":

@@ -88,8 +88,30 @@
 				/>
 			</div>
 		</div>
+		<!-- Recorded Lectures Section (only for Recorded tab) -->
+		<div v-if="currentTab === 'Recorded' && recordedLectures.data?.length" class="mb-10">
+			<div class="text-lg font-semibold text-ink-gray-9 mb-5">
+				{{ __('Recorded Lectures') }}
+			</div>
+			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+				<div
+					v-for="lecture in recordedLectures.data"
+					:key="lecture.name"
+					class="border rounded-md p-4 hover:border-outline-gray-3 cursor-pointer transition-colors"
+					@click="openRecordingModal(lecture)"
+				>
+					<div class="font-semibold text-ink-gray-9 mb-2">{{ lecture.title }}</div>
+					<div class="text-sm text-ink-gray-7 mb-2">{{ lecture.course_title }}</div>
+					<div class="text-xs text-ink-gray-5">
+						{{ dayjs(lecture.date).format('DD MMM YYYY') }}
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Courses Section -->
 		<div
-			v-if="courses.data?.length"
+			v-if="courses.data?.length && currentTab !== 'Recorded'"
 			class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-8"
 		>
 			<router-link
@@ -99,9 +121,10 @@
 				<CourseCard :course="course" />
 			</router-link>
 		</div>
-		<EmptyState v-else-if="!courses.list.loading" type="Courses" />
+		<EmptyState v-else-if="!courses.list.loading && currentTab !== 'Recorded'" type="Courses" />
+		<EmptyState v-else-if="currentTab === 'Recorded' && !recordedLectures.list.loading && !recordedLectures.data?.length" type="Courses" />
 		<div
-			v-if="!courses.list.loading && courses.hasNextPage"
+			v-if="!courses.list.loading && courses.hasNextPage && currentTab !== 'Recorded'"
 			class="flex justify-center mt-5"
 		>
 			<Button @click="courses.next()">
@@ -109,6 +132,24 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- Recording Modal -->
+	<Dialog
+		v-model="showRecordingModal"
+		:options="{
+			title: currentRecording?.title || __('Recorded Lecture'),
+			size: 'xl',
+		}"
+	>
+		<template #body-content>
+			<div v-if="currentRecording" class="p-4">
+				<div v-if="currentRecording.description" class="mb-4 text-ink-gray-7">
+					{{ currentRecording.description }}
+				</div>
+				<ZoomRecordingEmbed :liveClassId="currentRecording.name" />
+			</div>
+		</template>
+	</Dialog>
 </template>
 <script setup>
 import {
@@ -116,6 +157,7 @@ import {
 	Button,
 	call,
 	createListResource,
+	Dialog,
 	Dropdown,
 	FormControl,
 	Select,
@@ -128,6 +170,7 @@ import { sessionStore } from '@/stores/session'
 import { canCreateCourse } from '@/utils'
 import CourseCard from '@/components/CourseCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import ZoomRecordingEmbed from '@/components/ZoomRecordingEmbed.vue'
 import router from '../router'
 
 const user = inject('$user')
@@ -142,6 +185,13 @@ const filters = ref({})
 const currentTab = ref('Live')
 const { brand } = sessionStore()
 const courseCount = ref(0)
+const showRecordingModal = ref(false)
+const currentRecording = ref(null)
+
+const recordedLectures = createListResource({
+	url: 'lms.lms.api.get_recorded_lectures',
+	auto: false,
+})
 
 onMounted(() => {
 	// Set default tab based on user role
@@ -153,8 +203,8 @@ onMounted(() => {
 	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
-		// Students can only access Enrolled and Live tabs
-		const validStudentTabs = ['Enrolled', 'Live']
+		// Students can access Enrolled, Live, and Recorded tabs
+		const validStudentTabs = ['Enrolled', 'Live', 'Recorded']
 		if (!validStudentTabs.includes(currentTab.value)) {
 			currentTab.value = 'Enrolled'
 		} else if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
@@ -289,6 +339,7 @@ const updateTabFilter = () => {
 	delete filters.value['created']
 	delete filters.value['published_on']
 	delete filters.value['upcoming']
+	delete filters.value['recorded']
 
 	if (currentTab.value == 'All') {
 		// All tab - show all courses without filters (only for admins)
@@ -298,6 +349,11 @@ const updateTabFilter = () => {
 	} else if (currentTab.value == 'Enrolled' && user.data?.is_student) {
 		filters.value['enrolled'] = 1
 		delete filters.value['published']
+	} else if (currentTab.value == 'Recorded' && user.data?.is_student) {
+		// Recorded tab - show courses with recorded lectures for enrolled students
+		filters.value['recorded'] = 1
+		delete filters.value['published']
+		delete filters.value['enrolled']
 	} else if (currentTab.value == 'Created') {
 		// For instructors/moderators, show all their created courses
 		filters.value['created'] = 1
@@ -369,8 +425,18 @@ const updateCategories = (data) => {
 }
 
 watch(currentTab, () => {
-	updateCourses()
+	if (currentTab.value === 'Recorded') {
+		// Load recorded lectures when Recorded tab is selected
+		recordedLectures.reload()
+	} else {
+		updateCourses()
+	}
 })
+
+const openRecordingModal = (lecture) => {
+	currentRecording.value = lecture
+	showRecordingModal.value = true
+}
 
 const courseTabs = computed(() => {
 	// Check if user is a student (not moderator, instructor, or evaluator)
@@ -379,13 +445,16 @@ const courseTabs = computed(() => {
 	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
-		// Students only see Enrolled and Live tabs
+		// Students see Enrolled, Live, and Recorded tabs
 		return [
 			{
 				label: __('Enrolled'),
 			},
 			{
 				label: __('Live'),
+			},
+			{
+				label: __('Recorded'),
 			},
 		]
 	}

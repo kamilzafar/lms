@@ -30,7 +30,12 @@
   "section_break_yrpq",
   "start_url",
   "column_break_yokr",
-  "join_url"
+  "join_url",
+  "section_break_recording",
+  "recording_available",
+  "recording_url",
+  "column_break_recording_pw",
+  "recording_password"
  ],
  "fields": [
   {
@@ -123,7 +128,7 @@
    "options": "LMS Batch"
   },
   {
-   "default": "No Recording",
+   "default": "Cloud",
    "fieldname": "auto_recording",
    "fieldtype": "Select",
    "label": "Auto Recording",
@@ -166,6 +171,34 @@
   {
    "fieldname": "column_break_aony",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_recording",
+   "fieldtype": "Section Break",
+   "label": "Recording"
+  },
+  {
+   "default": "0",
+   "fieldname": "recording_available",
+   "fieldtype": "Check",
+   "label": "Recording Available",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recording_url",
+   "fieldtype": "Small Text",
+   "label": "Recording URL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_recording_pw",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "recording_password",
+   "fieldtype": "Password",
+   "label": "Recording Password",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,

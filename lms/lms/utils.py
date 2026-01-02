@@ -782,8 +782,8 @@ def update_course_filters(filters):
 				filters.update({"name": ["in", []]})
 		
 		# Apply filter for students: only enrolled courses and live courses
-		# (unless "enrolled" filter is explicitly set, which will override this)
-		elif is_student and not filters.get("enrolled"):
+		# (unless "enrolled" or "recorded" filter is explicitly set, which will override this)
+		elif is_student and not filters.get("enrolled") and not filters.get("recorded"):
 			# Get enrolled courses
 			enrolled_courses = frappe.get_all(
 				"LMS Enrollment", {"member": frappe.session.user}, pluck="course"
@@ -804,6 +804,77 @@ def update_course_filters(filters):
 			else:
 				# If no courses match, return empty result
 				filters.update({"name": ["in", []]})
+		
+		# Apply filter for students: only courses with recorded lectures they're enrolled in
+		elif is_student and filters.get("recorded"):
+			# Get all batches the student is enrolled in
+			enrolled_batches = frappe.get_all(
+				"LMS Batch Enrollment",
+				{"member": frappe.session.user},
+				pluck="batch"
+			)
+			
+			# Get all live classes from enrolled batches that have recordings
+			batches_with_recordings = []
+			if enrolled_batches:
+				live_classes_with_recordings = frappe.get_all(
+					"LMS Live Class",
+					filters={
+						"batch_name": ["in", enrolled_batches],
+						"auto_recording": ["!=", "No Recording"],
+					},
+					pluck="batch_name",
+					distinct=True
+				)
+				batches_with_recordings = list(set(live_classes_with_recordings))
+			
+			# Get courses from batches with recordings
+			courses_from_batches = []
+			if batches_with_recordings:
+				courses_from_batches = frappe.get_all(
+					"Batch Course",
+					{"parent": ["in", batches_with_recordings]},
+					pluck="course",
+					distinct=True
+				)
+			
+			# Get directly enrolled courses
+			enrolled_courses = frappe.get_all(
+				"LMS Enrollment", {"member": frappe.session.user}, pluck="course"
+			)
+			
+			# For directly enrolled courses, check if they have batches with recordings
+			courses_with_recordings = list(set(courses_from_batches + enrolled_courses))
+			
+			# Filter to only courses that actually have recorded lectures
+			final_courses = []
+			for course in courses_with_recordings:
+				# Check if course has batches with recordings
+				course_batches = frappe.get_all(
+					"Batch Course",
+					{"course": course},
+					pluck="parent"
+				)
+				if course_batches:
+					has_recordings = frappe.db.exists(
+						"LMS Live Class",
+						{
+							"batch_name": ["in", course_batches],
+							"auto_recording": ["!=", "No Recording"],
+						}
+					)
+					if has_recordings:
+						final_courses.append(course)
+				else:
+					# Direct enrollment - include it (student is enrolled)
+					final_courses.append(course)
+			
+			if final_courses:
+				filters.update({"name": ["in", final_courses]})
+			else:
+				# If no courses match, return empty result
+				filters.update({"name": ["in", []]})
+			del filters["recorded"]
 
 	if filters.get("title"):
 		or_filters = get_course_or_filters(filters)
