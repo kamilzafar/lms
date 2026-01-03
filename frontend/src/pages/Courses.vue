@@ -269,13 +269,19 @@ const liveClasses = createListResource({
 onMounted(() => {
 	// Set default tab based on user role
 	// Use is_student from API which checks for LMS Student role
-	const isStudent = user.data?.is_student
+	const isAdmin = user.data?.is_system_manager
 	const isInstructorOrModerator = user.data && 
 		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator) &&
-		!user.data?.is_system_manager
-	const isAdmin = user.data?.is_system_manager
+		!isAdmin
+	const isStudent = user.data?.is_student && !isAdmin
 	
-	if (isStudent) {
+	// Admins get all tabs - check admin first
+	if (isAdmin) {
+		// Admins default to All tab
+		if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
+			currentTab.value = 'All'
+		}
+	} else if (isStudent) {
 		// Students can access Enrolled, Live, and Recording tabs
 		const validStudentTabs = ['Enrolled', 'Live', 'Recording']
 		if (!validStudentTabs.includes(currentTab.value)) {
@@ -288,11 +294,6 @@ onMounted(() => {
 		// Instructors/moderators can only access Created tab
 		if (currentTab.value !== 'Created') {
 			currentTab.value = 'Created'
-		}
-	} else if (isAdmin) {
-		// Admins default to All tab
-		if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
-			currentTab.value = 'All'
 		}
 	}
 	
@@ -542,24 +543,8 @@ const openRecordingModal = (lecture) => {
 }
 
 const courseTabs = computed(() => {
-	// Use is_student from API which checks for LMS Student role
-	const isStudent = user.data?.is_student
+	// Check admin first - admins always get all tabs regardless of other roles
 	const isAdmin = user.data?.is_system_manager
-	
-	if (isStudent) {
-		// Students see Enrolled, Live, and Recording tabs
-		return [
-			{
-				label: __('Enrolled'),
-			},
-			{
-				label: __('Live'),
-			},
-			{
-				label: __('Recording'),
-			},
-		]
-	}
 	
 	// For admins (System Managers) - show all tabs
 	if (isAdmin) {
@@ -581,6 +566,24 @@ const courseTabs = computed(() => {
 			},
 			{
 				label: __('Unpublished'),
+			},
+		]
+	}
+	
+	// Use is_student from API which checks for LMS Student role
+	const isStudent = user.data?.is_student
+	
+	if (isStudent) {
+		// Students see Enrolled, Live, and Recording tabs
+		return [
+			{
+				label: __('Enrolled'),
+			},
+			{
+				label: __('Live'),
+			},
+			{
+				label: __('Recording'),
 			},
 		]
 	}

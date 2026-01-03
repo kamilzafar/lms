@@ -1046,6 +1046,115 @@ def add_lesson(title, chapter, course, idx):
 		}
 	)
 	lesson_reference.insert()
+	
+	return lesson
+
+
+def create_lesson_from_recording(live_class_name):
+	"""
+	Automatically create a lesson in course chapter when a Zoom recording becomes available.
+	Creates lesson in all courses associated with the live class's batch.
+	"""
+	try:
+		live_class = frappe.get_doc("LMS Live Class", live_class_name)
+		
+		if not live_class.recording_available or not live_class.recording_url:
+			frappe.logger().info(f"[Recording Lesson] Recording not available yet for {live_class_name}")
+			return
+		
+		if not live_class.batch_name:
+			frappe.logger().info(f"[Recording Lesson] No batch associated with live class {live_class_name}")
+			return
+		
+		# Get all courses from the batch
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"parent": live_class.batch_name},
+			pluck="course",
+			distinct=True
+		)
+		
+		if not batch_courses:
+			frappe.logger().info(f"[Recording Lesson] No courses found for batch {live_class.batch_name}")
+			return
+		
+		# Check if lesson already exists for this live class
+		existing_lesson = frappe.db.exists(
+			"Course Lesson",
+			{"content": f"live_class:{live_class_name}"}
+		)
+		
+		if existing_lesson:
+			frappe.logger().info(f"[Recording Lesson] Lesson already exists for live class {live_class_name}")
+			return
+		
+		# Process each course
+		for course_name in batch_courses:
+			try:
+				# Find or create "Recordings" chapter (ONE chapter per course for ALL recordings)
+				# All recording lessons will be added to this same chapter
+				chapter_name = frappe.db.exists(
+					"Course Chapter",
+					{"course": course_name, "title": "Recordings"}
+				)
+				
+				if not chapter_name:
+					# Create new "Recordings" chapter (only once per course)
+					chapter = frappe.new_doc("Course Chapter")
+					chapter.title = "Recordings"
+					chapter.course = course_name
+					chapter.insert(ignore_permissions=True)
+					chapter_name = chapter.name
+					
+					# Add chapter to course
+					chapter_ref = frappe.new_doc("Chapter Reference")
+					chapter_ref.chapter = chapter_name
+					chapter_ref.parent = course_name
+					chapter_ref.parenttype = "LMS Course"
+					chapter_ref.parentfield = "chapters"
+					
+					# Get max idx for chapters
+					max_idx = frappe.db.get_value(
+						"Chapter Reference",
+						{"parent": course_name},
+						"max(idx)",
+						as_dict=False
+					) or 0
+					chapter_ref.idx = max_idx + 1
+					chapter_ref.insert(ignore_permissions=True)
+					
+					frappe.logger().info(f"[Recording Lesson] Created Recordings chapter for course {course_name}")
+				else:
+					frappe.logger().info(f"[Recording Lesson] Reusing existing Recordings chapter {chapter_name} for course {course_name}")
+				
+				# Get the chapter (existing or newly created) to find next lesson index
+				# All recording lessons will be added to this same chapter
+				chapter = frappe.get_doc("Course Chapter", chapter_name)
+				max_lesson_idx = frappe.db.get_value(
+					"Lesson Reference",
+					{"parent": chapter_name},
+					"max(idx)",
+					as_dict=False
+				) or 0
+				
+				# Create lesson with live class title
+				lesson_title = live_class.title or f"Recording - {live_class.date}"
+				lesson = add_lesson(lesson_title, chapter_name, course_name, max_lesson_idx + 1)
+				
+				# Store live class reference in lesson content for frontend to render recording
+				lesson.content = f"live_class:{live_class_name}"
+				if live_class.description:
+					lesson.body = live_class.description
+				lesson.save(ignore_permissions=True)
+				
+				frappe.logger().info(f"[Recording Lesson] Created lesson {lesson.name} for live class {live_class_name} in course {course_name}")
+				
+			except Exception as e:
+				frappe.logger().error(f"[Recording Lesson] Error creating lesson for course {course_name}: {str(e)}")
+				continue
+				
+	except Exception as e:
+		frappe.logger().error(f"[Recording Lesson] Error in create_lesson_from_recording: {str(e)}")
 
 
 @frappe.whitelist()
@@ -1952,15 +2061,28 @@ def get_recorded_lectures(course_name=None):
 			frappe.throw(_("You are not enrolled in this course"))
 		enrolled_courses = [course_name]
 	
+	# If no enrolled batches but student has enrolled courses, find batches containing those courses
+	if not enrolled_batches and enrolled_courses:
+		# Find batches that contain enrolled courses
+		batches_with_courses = frappe.get_all(
+			"Batch Course",
+			{"course": ["in", enrolled_courses]},
+			pluck="parent",
+			distinct=True
+		)
+		enrolled_batches = batches_with_courses
+	
+	# If still no batches, return empty
 	if not enrolled_batches:
 		return []
 	
 	# Get live classes with recordings from enrolled batches
+	# Include both available recordings and those that might still be processing
+	# (auto_recording enabled but recording_available might be 0 if still processing)
 	live_classes = frappe.get_all(
 		"LMS Live Class",
 		filters={
 			"batch_name": ["in", enrolled_batches],
-			"recording_available": 1,
 			"auto_recording": ["!=", "No Recording"]
 		},
 		fields=[
@@ -1971,7 +2093,8 @@ def get_recorded_lectures(course_name=None):
 			"time",
 			"duration",
 			"batch_name",
-			"recording_available"
+			"recording_available",
+			"meeting_id"
 		],
 		order_by="date desc"
 	)
@@ -1994,6 +2117,30 @@ def get_recorded_lectures(course_name=None):
 			live_class.course_name = course.name
 			live_class.course_title = course.title
 			live_class.course_image = course.image
+			
+			# Add status field to indicate if recording is processing
+			if not live_class.recording_available:
+				# Check if class has ended (recording might still be processing)
+				from datetime import datetime
+				try:
+					class_start = datetime.combine(
+						getdate(live_class.date),
+						datetime.strptime(str(live_class.time), "%H:%M:%S").time() if isinstance(live_class.time, str) else live_class.time
+					)
+					class_end = class_start + timedelta(minutes=cint(live_class.duration))
+					
+					if datetime.now() > class_end:
+						# Class has ended, recording might be processing
+						live_class.recording_status = "processing"
+					else:
+						# Class hasn't ended yet
+						live_class.recording_status = "not_started"
+				except (ValueError, TypeError):
+					# If date/time parsing fails, assume processing
+					live_class.recording_status = "processing"
+			else:
+				live_class.recording_status = "available"
+			
 			result.append(live_class)
 	
 	return result

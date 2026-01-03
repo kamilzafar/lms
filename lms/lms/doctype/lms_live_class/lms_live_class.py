@@ -344,6 +344,13 @@ def fetch_recording(live_class_name):
 					live_class.save(ignore_permissions=True)
 
 					frappe.logger().info(f"[Recording Fetch] Successfully saved recording for {live_class_name}")
+					
+					# Automatically create lesson in course chapter
+					try:
+						from lms.lms.api import create_lesson_from_recording
+						create_lesson_from_recording(live_class_name)
+					except Exception as e:
+						frappe.logger().error(f"[Recording Fetch] Error creating lesson from recording: {str(e)}")
 
 					return {
 						"recording_url": playback_url,

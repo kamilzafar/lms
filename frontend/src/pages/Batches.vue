@@ -155,16 +155,25 @@ const currentCategory = ref(null)
 const title = ref('')
 const certification = ref(false)
 const filters = ref({})
-const is_student = computed(() => user.data?.is_student)
+const isAdmin = computed(() => user.data?.is_system_manager)
+const is_student = computed(() => user.data?.is_student && !isAdmin.value)
 const currentTab = ref(is_student.value ? 'Enrolled' : 'Upcoming')
 const orderBy = ref('start_date')
 const readOnlyMode = window.read_only_mode
 const router = useRouter()
 
 onMounted(() => {
-	// Ensure students default to Enrolled tab
-	if (user.data?.is_student && currentTab.value !== 'Enrolled') {
-		currentTab.value = 'Enrolled'
+	// Admins get all tabs - check admin first
+	if (isAdmin.value) {
+		// Admins default to All tab
+		if (currentTab.value === 'Enrolled') {
+			currentTab.value = 'All'
+		}
+	} else if (is_student.value) {
+		// Ensure students default to Enrolled tab
+		if (currentTab.value !== 'Enrolled') {
+			currentTab.value = 'Enrolled'
+		}
 	}
 	
 	setFiltersFromQuery()
@@ -319,8 +328,18 @@ watch(currentTab, () => {
 })
 
 const batchTabs = computed(() => {
-	// For students, only show Enrolled tab
-	if (user.data?.is_student) {
+	// Check admin first - admins always get all tabs regardless of other roles
+	if (isAdmin.value) {
+		return [
+			{ label: __('All') },
+			{ label: __('Upcoming') },
+			{ label: __('Archived') },
+			{ label: __('Unpublished') },
+		]
+	}
+
+	// For students (who are not admins), only show Enrolled tab
+	if (is_student.value) {
 		return [
 			{
 				label: __('Enrolled'),
