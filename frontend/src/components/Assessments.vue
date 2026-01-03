@@ -201,8 +201,12 @@ const getRowRoute = (row) => {
 }
 
 const canAddAssessments = () => {
+	// Teachers cannot add assessments
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator) {
+		return false
+	}
 	if (readOnlyMode) return false
-	return user.data?.is_moderator || user.data?.is_evaluator
+	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
 }
 
 const getAssessmentColumns = () => {

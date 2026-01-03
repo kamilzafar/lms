@@ -18,7 +18,7 @@
 				row-key="batch_course"
 				:options="{
 					showTooltip: false,
-					selectable: user.data?.is_student ? false : true,
+					selectable: canSeeAddButton(),
 					getRowRoute: (row) => ({
 						name: 'CourseDetail',
 						params: { courseName: row.name },
@@ -159,9 +159,13 @@ const removeCourses = (selections, unselectAll) => {
 }
 
 const canSeeAddButton = () => {
+	// Teachers cannot add courses to batches
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator) {
+		return false
+	}
 	if (readOnlyMode) {
 		return false
 	}
-	return user.data?.is_moderator || user.data?.is_evaluator
+	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
 }
 </script>

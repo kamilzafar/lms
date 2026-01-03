@@ -265,6 +265,11 @@ const routes = [
 		component: () => import('@/pages/DataImport.vue'),
 		props: true,
 	},
+	{
+		path: '/zoom-diagnostics',
+		name: 'ZoomDiagnostics',
+		component: () => import('@/pages/ZoomDiagnostics.vue'),
+	},
 ]
 
 let router = createRouter({

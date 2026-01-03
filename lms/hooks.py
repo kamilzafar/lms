@@ -172,6 +172,11 @@ website_route_rules = [
 		"from_route": "/courses/<course_name>/<certificate_id>",
 		"to_route": "certificate",
 	},
+	# Zoom webhook route - cleaner URL for webhook endpoint
+	{
+		"from_route": "/webhook/zoom",
+		"to_route": "api/method/lms.lms.api.zoom_webhook",
+	},
 ]
 
 website_redirects = [

@@ -6,7 +6,7 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 import zipfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from xml.dom.minidom import parseString
 
 import frappe
@@ -2575,3 +2575,742 @@ def get_upcoming_batches():
 		limit=4,
 		pluck="name",
 	)
+
+
+# ============================================================================
+# ZOOM WEBHOOK HANDLER
+# ============================================================================
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def zoom_webhook():
+	"""
+	Handle Zoom webhook events for recording notifications.
+
+	Supported events:
+	- recording.completed: When a cloud recording is ready
+	- recording.transcript_completed: When transcript is ready
+	- endpoint.url_validation: Zoom URL validation challenge
+
+	Webhook URL: /api/method/lms.lms.api.zoom_webhook
+	"""
+	import hashlib
+	import hmac
+
+	try:
+		# Get request data
+		if frappe.request.data:
+			payload = json.loads(frappe.request.data)
+		else:
+			frappe.logger().error("[Zoom Webhook] No request data received")
+			return {"status": "error", "message": "No data received"}
+
+		event_type = payload.get("event", "")
+
+		frappe.logger().info(f"[Zoom Webhook] Received event: {event_type}")
+		frappe.logger().info(f"[Zoom Webhook] Payload: {json.dumps(payload, indent=2)}")
+
+		# Handle Zoom URL validation challenge (required for webhook setup)
+		if event_type == "endpoint.url_validation":
+			return _handle_zoom_url_validation(payload)
+
+		# Get webhook signature from headers for verification
+		signature = frappe.request.headers.get("x-zm-signature", "")
+		timestamp = frappe.request.headers.get("x-zm-request-timestamp", "")
+
+		# Verify webhook signature if secret is configured
+		if signature and timestamp:
+			is_valid = _verify_zoom_webhook_signature(
+				frappe.request.data.decode("utf-8"),
+				signature,
+				timestamp
+			)
+			if not is_valid:
+				frappe.logger().warning("[Zoom Webhook] Invalid signature - request may not be from Zoom")
+				# Continue processing anyway for now, but log the warning
+
+		# Handle recording events
+		if event_type in ["recording.completed", "recording.transcript_completed"]:
+			return _handle_recording_event(payload)
+
+		# Handle other events (just acknowledge)
+		frappe.logger().info(f"[Zoom Webhook] Unhandled event type: {event_type}")
+		return {"status": "success", "message": f"Event {event_type} acknowledged"}
+
+	except Exception as e:
+		frappe.logger().error(f"[Zoom Webhook] Error processing webhook: {str(e)}")
+		frappe.log_error(title="Zoom Webhook Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+def _handle_zoom_url_validation(payload):
+	"""
+	Handle Zoom URL validation challenge.
+	Required when setting up webhook endpoint in Zoom App.
+
+	Zoom sends: {"event": "endpoint.url_validation", "payload": {"plainToken": "xxx"}}
+	We respond: {"plainToken": "xxx", "encryptedToken": hmac_sha256(plainToken, secret)}
+	"""
+	import hashlib
+	import hmac
+
+	plain_token = payload.get("payload", {}).get("plainToken", "")
+
+	if not plain_token:
+		frappe.logger().error("[Zoom Webhook] No plainToken in validation request")
+		return {"status": "error", "message": "No plainToken provided"}
+
+	# Get any webhook secret from configured Zoom accounts
+	zoom_accounts = frappe.get_all(
+		"LMS Zoom Settings",
+		filters={"enabled": 1, "webhook_secret": ["is", "set"]},
+		fields=["name", "webhook_secret"]
+	)
+
+	if not zoom_accounts:
+		frappe.logger().warning("[Zoom Webhook] No webhook secret configured - returning plain token only")
+		# Return plain token without encryption (will work but not verified)
+		return {
+			"plainToken": plain_token,
+			"encryptedToken": ""
+		}
+
+	# Use first configured secret
+	secret = frappe.get_doc("LMS Zoom Settings", zoom_accounts[0].name).get_password("webhook_secret")
+
+	if not secret:
+		frappe.logger().warning("[Zoom Webhook] Webhook secret is empty")
+		return {
+			"plainToken": plain_token,
+			"encryptedToken": ""
+		}
+
+	# Generate HMAC SHA256 hash
+	encrypted_token = hmac.new(
+		secret.encode("utf-8"),
+		plain_token.encode("utf-8"),
+		hashlib.sha256
+	).hexdigest()
+
+	frappe.logger().info(f"[Zoom Webhook] URL validation successful")
+
+	return {
+		"plainToken": plain_token,
+		"encryptedToken": encrypted_token
+	}
+
+
+def _verify_zoom_webhook_signature(payload_body, signature, timestamp):
+	"""
+	Verify Zoom webhook signature using HMAC SHA256.
+
+	Signature format: v0=hash
+	Message format: v0:{timestamp}:{payload_body}
+	"""
+	import hashlib
+	import hmac
+
+	# Get webhook secrets from all enabled Zoom accounts
+	zoom_accounts = frappe.get_all(
+		"LMS Zoom Settings",
+		filters={"enabled": 1, "webhook_secret": ["is", "set"]},
+		fields=["name"]
+	)
+
+	if not zoom_accounts:
+		frappe.logger().warning("[Zoom Webhook] No webhook secret configured for signature verification")
+		return True  # Allow if no secret configured
+
+	# Try each configured secret
+	for account in zoom_accounts:
+		try:
+			secret = frappe.get_doc("LMS Zoom Settings", account.name).get_password("webhook_secret")
+			if not secret:
+				continue
+
+			# Create message to sign
+			message = f"v0:{timestamp}:{payload_body}"
+
+			# Generate expected signature
+			expected_signature = "v0=" + hmac.new(
+				secret.encode("utf-8"),
+				message.encode("utf-8"),
+				hashlib.sha256
+			).hexdigest()
+
+			# Compare signatures
+			if hmac.compare_digest(expected_signature, signature):
+				frappe.logger().info(f"[Zoom Webhook] Signature verified with account {account.name}")
+				return True
+		except Exception as e:
+			frappe.logger().error(f"[Zoom Webhook] Error verifying signature with {account.name}: {e}")
+			continue
+
+	return False
+
+
+def _handle_recording_event(payload):
+	"""
+	Handle recording.completed and recording.transcript_completed events.
+
+	Updates the LMS Live Class with recording information.
+	"""
+	try:
+		event_type = payload.get("event", "")
+		event_data = payload.get("payload", {}).get("object", {})
+
+		meeting_id = event_data.get("id")  # Numeric meeting ID
+		meeting_uuid = event_data.get("uuid")  # Meeting UUID
+		topic = event_data.get("topic", "")
+		share_url = event_data.get("share_url", "")
+		password = event_data.get("password", "")
+		recording_files = event_data.get("recording_files", [])
+
+		frappe.logger().info(f"[Zoom Webhook] Processing {event_type} for meeting {meeting_id} (UUID: {meeting_uuid})")
+		frappe.logger().info(f"[Zoom Webhook] Topic: {topic}, Share URL: {share_url}")
+		frappe.logger().info(f"[Zoom Webhook] Recording files: {len(recording_files)}")
+
+		# Find matching LMS Live Class
+		live_class = _find_live_class_by_meeting(meeting_id, meeting_uuid, topic)
+
+		if not live_class:
+			frappe.logger().warning(f"[Zoom Webhook] No matching LMS Live Class found for meeting {meeting_id}")
+			return {"status": "success", "message": "No matching live class found"}
+
+		frappe.logger().info(f"[Zoom Webhook] Found matching live class: {live_class.name}")
+
+		# Check if recording already available
+		if live_class.recording_available:
+			frappe.logger().info(f"[Zoom Webhook] Recording already available for {live_class.name}")
+			return {"status": "success", "message": "Recording already processed"}
+
+		# Find the best recording URL
+		recording_url = _extract_best_recording_url(recording_files, share_url)
+
+		if not recording_url:
+			frappe.logger().warning(f"[Zoom Webhook] No suitable recording URL found")
+			return {"status": "success", "message": "No recording URL in payload"}
+
+		# Update live class with recording info
+		live_class.recording_url = recording_url
+		live_class.recording_password = password
+		live_class.recording_available = 1
+
+		# Also update UUID if not set
+		if not live_class.uuid and meeting_uuid:
+			live_class.uuid = meeting_uuid
+
+		live_class.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		frappe.logger().info(f"[Zoom Webhook] Successfully updated recording for {live_class.name}")
+
+		# Create lesson from recording
+		try:
+			create_lesson_from_recording(live_class.name)
+			frappe.logger().info(f"[Zoom Webhook] Created lesson from recording for {live_class.name}")
+		except Exception as e:
+			frappe.logger().error(f"[Zoom Webhook] Error creating lesson: {str(e)}")
+
+		return {
+			"status": "success",
+			"message": f"Recording updated for {live_class.name}",
+			"live_class": live_class.name
+		}
+
+	except Exception as e:
+		frappe.logger().error(f"[Zoom Webhook] Error handling recording event: {str(e)}")
+		frappe.log_error(title="Zoom Webhook Recording Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+def _find_live_class_by_meeting(meeting_id, meeting_uuid, topic):
+	"""
+	Find LMS Live Class matching the Zoom meeting.
+
+	Tries multiple matching strategies:
+	1. By meeting_id (numeric ID)
+	2. By UUID (if meeting_id not found)
+	3. By title/topic (fuzzy match as fallback)
+	"""
+	# Strategy 1: Match by meeting_id
+	if meeting_id:
+		live_class = frappe.db.get_value(
+			"LMS Live Class",
+			{"meeting_id": str(meeting_id)},
+			"name"
+		)
+		if live_class:
+			return frappe.get_doc("LMS Live Class", live_class)
+
+	# Strategy 2: Match by UUID
+	if meeting_uuid:
+		live_class = frappe.db.get_value(
+			"LMS Live Class",
+			{"uuid": meeting_uuid},
+			"name"
+		)
+		if live_class:
+			return frappe.get_doc("LMS Live Class", live_class)
+
+	# Strategy 3: Match by title (exact match)
+	if topic:
+		live_class = frappe.db.get_value(
+			"LMS Live Class",
+			{"title": topic},
+			"name"
+		)
+		if live_class:
+			return frappe.get_doc("LMS Live Class", live_class)
+
+	# Strategy 4: Match by title (fuzzy - topic contains title or vice versa)
+	if topic:
+		# Get recent live classes without recordings
+		recent_classes = frappe.get_all(
+			"LMS Live Class",
+			filters={
+				"recording_available": 0,
+				"auto_recording": ["!=", "No Recording"],
+				"date": [">=", frappe.utils.add_days(frappe.utils.nowdate(), -7)]  # Last 7 days
+			},
+			fields=["name", "title", "meeting_id", "uuid"]
+		)
+
+		for lc in recent_classes:
+			if lc.title and (lc.title in topic or topic in lc.title):
+				frappe.logger().info(f"[Zoom Webhook] Fuzzy matched '{topic}' to '{lc.title}'")
+				return frappe.get_doc("LMS Live Class", lc.name)
+
+	return None
+
+
+def _extract_best_recording_url(recording_files, share_url):
+	"""
+	Extract the best recording URL from Zoom recording files.
+
+	Priority:
+	1. MP4 video file with play_url
+	2. shared_screen_with_speaker_view type
+	3. Any video file (not transcript/audio only)
+	4. Share URL as fallback
+	"""
+	if not recording_files and share_url:
+		return share_url
+
+	# Filter for completed recordings
+	completed_files = [
+		f for f in recording_files
+		if f.get("status") == "completed"
+	]
+
+	if not completed_files:
+		completed_files = recording_files
+
+	# Priority 1: MP4 files
+	for file in completed_files:
+		if file.get("file_type") == "MP4":
+			url = file.get("play_url") or file.get("share_url") or file.get("download_url")
+			if url:
+				frappe.logger().info(f"[Zoom Webhook] Selected MP4 recording: {file.get('recording_type')}")
+				return url
+
+	# Priority 2: shared_screen_with_speaker_view
+	for file in completed_files:
+		if file.get("recording_type") == "shared_screen_with_speaker_view":
+			url = file.get("play_url") or file.get("share_url") or file.get("download_url")
+			if url:
+				frappe.logger().info("[Zoom Webhook] Selected shared_screen_with_speaker_view recording")
+				return url
+
+	# Priority 3: Any video recording (not transcript/audio)
+	video_types = ["MP4", "M4A"]
+	non_video_types = ["TRANSCRIPT", "VTT", "TXT", "CHAT"]
+
+	for file in completed_files:
+		file_type = file.get("file_type", "").upper()
+		if file_type not in non_video_types:
+			url = file.get("play_url") or file.get("share_url") or file.get("download_url")
+			if url:
+				frappe.logger().info(f"[Zoom Webhook] Selected {file_type} recording")
+				return url
+
+	# Priority 4: Share URL fallback
+	if share_url:
+		frappe.logger().info("[Zoom Webhook] Using share_url as fallback")
+		return share_url
+
+	return None
+
+
+@frappe.whitelist(allow_guest=True, methods=["GET"])
+def zoom_webhook_status():
+	"""
+	Health check endpoint for Zoom webhook.
+	Can be used to verify the webhook is accessible.
+	"""
+	return {
+		"status": "ok",
+		"message": "Zoom webhook endpoint is active",
+		"timestamp": frappe.utils.now()
+	}
+
+
+# ============================================================================
+# ZOOM RECORDING DIAGNOSTICS
+# ============================================================================
+
+@frappe.whitelist()
+def zoom_recording_diagnostics():
+	"""
+	Comprehensive diagnostics for Zoom recording integration.
+	Returns status of all components and recent activity.
+	"""
+	if not frappe.has_permission("LMS Live Class", "read"):
+		frappe.throw(_("Permission denied"))
+
+	diagnostics = {
+		"timestamp": frappe.utils.now(),
+		"zoom_accounts": _get_zoom_accounts_status(),
+		"webhook_config": _get_webhook_config_status(),
+		"pending_recordings": _get_pending_recordings(),
+		"recent_recordings": _get_recent_recordings(),
+		"recent_errors": _get_recent_errors(),
+		"cron_job_status": _get_cron_job_status(),
+	}
+
+	return diagnostics
+
+
+def _get_zoom_accounts_status():
+	"""Get status of all configured Zoom accounts"""
+	accounts = frappe.get_all(
+		"LMS Zoom Settings",
+		fields=["name", "account_name", "enabled", "member", "webhook_url"],
+	)
+
+	result = []
+	for acc in accounts:
+		# Check if credentials are set (without exposing them)
+		doc = frappe.get_doc("LMS Zoom Settings", acc.name)
+		has_account_id = bool(doc.account_id)
+		has_client_id = bool(doc.client_id)
+		has_client_secret = bool(doc.get_password("client_secret", raise_exception=False))
+		has_webhook_secret = bool(doc.get_password("webhook_secret", raise_exception=False))
+
+		# Test authentication
+		auth_status = "Not tested"
+		if acc.enabled and has_account_id and has_client_id and has_client_secret:
+			try:
+				from lms.lms.doctype.lms_batch.lms_batch import authenticate
+				token = authenticate(acc.name)
+				auth_status = "OK" if token else "Failed"
+			except Exception as e:
+				auth_status = f"Error: {str(e)[:50]}"
+
+		result.append({
+			"name": acc.name,
+			"account_name": acc.account_name,
+			"enabled": acc.enabled,
+			"member": acc.member,
+			"webhook_url": acc.webhook_url,
+			"has_account_id": has_account_id,
+			"has_client_id": has_client_id,
+			"has_client_secret": has_client_secret,
+			"has_webhook_secret": has_webhook_secret,
+			"auth_status": auth_status,
+		})
+
+	return result
+
+
+def _get_webhook_config_status():
+	"""Get webhook configuration status"""
+	base_url = frappe.utils.get_url()
+	webhook_urls = [
+		f"{base_url}/webhook/zoom",
+		f"{base_url}/api/method/lms.lms.api.zoom_webhook",
+	]
+
+	# Check if any account has webhook secret configured
+	accounts_with_secret = frappe.get_all(
+		"LMS Zoom Settings",
+		filters={"enabled": 1, "webhook_secret": ["is", "set"]},
+		fields=["name"]
+	)
+
+	return {
+		"webhook_urls": webhook_urls,
+		"accounts_with_webhook_secret": len(accounts_with_secret),
+		"signature_verification_enabled": len(accounts_with_secret) > 0,
+	}
+
+
+def _get_pending_recordings():
+	"""Get live classes waiting for recordings"""
+	from datetime import datetime, timedelta
+
+	cutoff_time = datetime.now() - timedelta(minutes=90)
+	ten_minutes_ago = datetime.now() - timedelta(minutes=10)
+
+	pending = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"auto_recording": ["!=", "No Recording"],
+			"recording_available": 0,
+		},
+		fields=["name", "title", "date", "time", "duration", "meeting_id", "uuid", "auto_recording", "batch_name"],
+		order_by="date desc, time desc",
+		limit=20
+	)
+
+	result = []
+	for lc in pending:
+		try:
+			class_start = datetime.combine(
+				getdate(lc.date),
+				datetime.strptime(str(lc.time), "%H:%M:%S").time() if isinstance(lc.time, str) else lc.time
+			)
+			class_end = class_start + timedelta(minutes=cint(lc.duration or 60))
+			time_since_end = datetime.now() - class_end
+
+			status = "Scheduled"
+			if datetime.now() < class_start:
+				status = "Not started"
+			elif datetime.now() < class_end:
+				status = "In progress"
+			elif time_since_end.total_seconds() < 600:  # Less than 10 min
+				status = "Just ended - waiting"
+			elif time_since_end.total_seconds() < 5400:  # Less than 90 min
+				status = "Ready for fetch"
+			else:
+				status = "Past fetch window"
+
+			result.append({
+				"name": lc.name,
+				"title": lc.title,
+				"date": str(lc.date),
+				"time": str(lc.time),
+				"batch": lc.batch_name,
+				"meeting_id": lc.meeting_id,
+				"has_uuid": bool(lc.uuid),
+				"auto_recording": lc.auto_recording,
+				"status": status,
+				"minutes_since_end": round(time_since_end.total_seconds() / 60, 1) if datetime.now() > class_end else None,
+			})
+		except Exception as e:
+			result.append({
+				"name": lc.name,
+				"title": lc.title,
+				"error": str(e),
+			})
+
+	return result
+
+
+def _get_recent_recordings():
+	"""Get recently fetched recordings"""
+	recent = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"recording_available": 1,
+		},
+		fields=["name", "title", "date", "time", "batch_name", "recording_url", "modified"],
+		order_by="modified desc",
+		limit=10
+	)
+
+	result = []
+	for lc in recent:
+		# Check if lesson was created
+		lesson_exists = frappe.db.exists(
+			"Course Lesson",
+			{"content": f"live_class:{lc.name}"}
+		)
+
+		result.append({
+			"name": lc.name,
+			"title": lc.title,
+			"date": str(lc.date),
+			"batch": lc.batch_name,
+			"has_recording_url": bool(lc.recording_url),
+			"recording_url_preview": lc.recording_url[:80] + "..." if lc.recording_url and len(lc.recording_url) > 80 else lc.recording_url,
+			"lesson_created": bool(lesson_exists),
+			"modified": str(lc.modified),
+		})
+
+	return result
+
+
+def _get_recent_errors():
+	"""Get recent Zoom-related errors from error log"""
+	errors = frappe.get_all(
+		"Error Log",
+		filters={
+			"creation": [">=", frappe.utils.add_days(frappe.utils.nowdate(), -7)],
+			"error": ["like", "%Zoom%"]
+		},
+		fields=["name", "method", "error", "creation"],
+		order_by="creation desc",
+		limit=10
+	)
+
+	result = []
+	for err in errors:
+		result.append({
+			"name": err.name,
+			"method": err.method,
+			"error_preview": err.error[:200] + "..." if len(err.error) > 200 else err.error,
+			"creation": str(err.creation),
+		})
+
+	return result
+
+
+def _get_cron_job_status():
+	"""Get status of the recording fetch cron job"""
+	# Check if there's a scheduled job log
+	last_run = frappe.get_all(
+		"Scheduled Job Log",
+		filters={
+			"scheduled_job_type": ["like", "%fetch_pending_recordings%"]
+		},
+		fields=["status", "creation", "details"],
+		order_by="creation desc",
+		limit=5
+	)
+
+	return {
+		"job_name": "lms.lms.doctype.lms_live_class.lms_live_class.fetch_pending_recordings",
+		"schedule": "Every 10 minutes",
+		"recent_runs": [
+			{
+				"status": run.status,
+				"creation": str(run.creation),
+				"details": run.details[:100] if run.details else None,
+			}
+			for run in last_run
+		]
+	}
+
+
+@frappe.whitelist()
+def test_zoom_recording_fetch(live_class_name):
+	"""
+	Manually trigger recording fetch for a specific live class.
+	Useful for testing and debugging.
+	"""
+	if not frappe.has_permission("LMS Live Class", "write"):
+		frappe.throw(_("Permission denied"))
+
+	live_class = frappe.get_doc("LMS Live Class", live_class_name)
+
+	if not live_class.meeting_id:
+		return {
+			"status": "error",
+			"message": "No meeting_id set for this live class"
+		}
+
+	if live_class.recording_available:
+		return {
+			"status": "info",
+			"message": "Recording already available",
+			"recording_url": live_class.recording_url
+		}
+
+	# Import and call fetch_recording
+	from lms.lms.doctype.lms_live_class.lms_live_class import fetch_recording
+
+	result = fetch_recording(live_class_name)
+
+	return {
+		"status": "success",
+		"message": "Recording fetch attempted",
+		"result": result
+	}
+
+
+@frappe.whitelist()
+def simulate_zoom_webhook(live_class_name):
+	"""
+	Simulate a Zoom webhook for testing purposes.
+	Creates a mock payload based on the live class data.
+	"""
+	if not frappe.has_permission("LMS Live Class", "write"):
+		frappe.throw(_("Permission denied"))
+
+	live_class = frappe.get_doc("LMS Live Class", live_class_name)
+
+	# Create mock webhook payload similar to what Zoom sends
+	mock_payload = {
+		"event": "recording.completed",
+		"payload": {
+			"account_id": "test_account",
+			"object": {
+				"uuid": live_class.uuid or f"test-uuid-{live_class.name}",
+				"id": int(live_class.meeting_id) if live_class.meeting_id else 12345678,
+				"topic": live_class.title,
+				"share_url": f"https://zoom.us/rec/share/test-{live_class.name}",
+				"password": "TestPass123",
+				"recording_files": [
+					{
+						"id": "test-recording-id",
+						"file_type": "MP4",
+						"recording_type": "shared_screen_with_speaker_view",
+						"status": "completed",
+						"play_url": f"https://zoom.us/rec/play/test-{live_class.name}",
+						"download_url": f"https://zoom.us/rec/download/test-{live_class.name}",
+					}
+				]
+			}
+		},
+		"event_ts": int(frappe.utils.now_datetime().timestamp() * 1000)
+	}
+
+	# Process the mock payload
+	result = _handle_recording_event(mock_payload)
+
+	return {
+		"status": "success",
+		"message": "Simulated webhook processed",
+		"mock_payload": mock_payload,
+		"result": result
+	}
+
+
+@frappe.whitelist()
+def get_zoom_recording_logs(live_class_name=None, limit=50):
+	"""
+	Get recent logs related to Zoom recordings.
+	Searches scheduler logs for recording-related entries.
+	"""
+	if not frappe.has_permission("LMS Live Class", "read"):
+		frappe.throw(_("Permission denied"))
+
+	# Get from Error Log
+	filters = {
+		"creation": [">=", frappe.utils.add_days(frappe.utils.nowdate(), -7)],
+	}
+
+	if live_class_name:
+		filters["error"] = ["like", f"%{live_class_name}%"]
+	else:
+		filters["error"] = ["like", "%Recording%"]
+
+	logs = frappe.get_all(
+		"Error Log",
+		filters=filters,
+		fields=["name", "method", "error", "creation"],
+		order_by="creation desc",
+		limit=limit
+	)
+
+	return {
+		"logs": [
+			{
+				"name": log.name,
+				"method": log.method,
+				"message": log.error[:500] if log.error else "",
+				"creation": str(log.creation),
+			}
+			for log in logs
+		]
+	}

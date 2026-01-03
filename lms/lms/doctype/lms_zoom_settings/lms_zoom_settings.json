@@ -15,7 +15,10 @@
   "column_break_fxxg",
   "account_id",
   "client_id",
-  "client_secret"
+  "client_secret",
+  "webhook_section",
+  "webhook_secret",
+  "webhook_url"
  ],
  "fields": [
   {
@@ -78,12 +81,30 @@
    "fieldname": "member_image",
    "fieldtype": "Attach Image",
    "label": "Member Image"
+  },
+  {
+   "fieldname": "webhook_section",
+   "fieldtype": "Section Break",
+   "label": "Webhook Settings"
+  },
+  {
+   "description": "Secret Token from Zoom App > Feature > Webhook. Used to verify webhook requests.",
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret Token"
+  },
+  {
+   "description": "Copy this URL and paste it in your Zoom App > Feature > Event notification endpoint URL",
+   "fieldname": "webhook_url",
+   "fieldtype": "Data",
+   "label": "Webhook URL",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-10 11:39:13.146961",
+ "modified": "2026-01-04 12:00:00.000000",
  "modified_by": "sayali@frappe.io",
  "module": "LMS",
  "name": "LMS Zoom Settings",

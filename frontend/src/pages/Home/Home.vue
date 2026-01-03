@@ -1,9 +1,4 @@
 <template>
-	<!-- <header
-		class="sticky flex items-center justify-between top-0 z-10 border-b bg-surface-white px-3 py-2.5 sm:px-5"
-	>
-		<Breadcrumbs :items="[{ label: __('Home'), route: { name: 'Home' } }]" />
-	</header> -->
 	<div class="w-full px-5 pt-5 pb-10">
 		<div class="space-y-2">
 			<div class="flex items-center justify-between">
@@ -12,7 +7,6 @@
 				</div>
 				<div>
 					<div
-						v-if="!isAdmin"
 						@click="showStreakModal = true"
 						class="bg-surface-amber-2 px-2 py-1 rounded-md cursor-pointer"
 					>
@@ -29,26 +23,25 @@
 			</div>
 		</div>
 
-		<AdminHome
-			v-if="isAdmin"
-			:liveClasses="adminLiveClasses"
-			:evals="adminEvals"
+		<!-- Unified Homepage Layout for All Roles -->
+		<UnifiedHome
+			:liveClasses="liveClasses"
+			:courses="courses"
+			:evals="evals"
+			:isAdmin="isAdmin"
 		/>
-		<StudentHome v-else :myLiveClasses="myLiveClasses" />
 	</div>
 	<Streak v-model="showStreakModal" :streakInfo="streakInfo" />
 </template>
 <script setup lang="ts">
 import { computed, inject, onMounted, ref } from 'vue'
 import {
-	Breadcrumbs,
 	call,
 	createResource,
 	usePageMeta,
 } from 'frappe-ui'
 import { sessionStore } from '@/stores/session'
-import StudentHome from '@/pages/Home/StudentHome.vue'
-import AdminHome from '@/pages/Home/AdminHome.vue'
+import UnifiedHome from '@/pages/Home/UnifiedHome.vue'
 import Streak from '@/pages/Home/Streak.vue'
 
 const user = inject<any>('$user')
@@ -62,14 +55,21 @@ onMounted(() => {
 	})
 })
 
+// Admin = System Manager, Instructor, Moderator, Evaluator (but NOT Teacher)
 const isAdmin = computed(() => {
+	// Teachers are NOT admins - they only view enrolled content
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator) {
+		return false
+	}
 	return (
+		user.data?.is_system_manager ||
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
 		user.data?.is_evaluator
 	)
 })
 
+// Teachers and Students get enrolled live classes, Admins get all admin live classes
 const myLiveClasses = createResource({
 	url: 'lms.lms.api.get_my_live_classes',
 	auto: !isAdmin.value ? true : false,
@@ -80,9 +80,41 @@ const adminLiveClasses = createResource({
 	auto: isAdmin.value ? true : false,
 })
 
+// Unified live classes - depends on role
+const liveClasses = computed(() => {
+	if (isAdmin.value) {
+		return adminLiveClasses
+	}
+	return myLiveClasses
+})
+
+// Teachers and Students get enrolled courses, Admins get created courses
+const myCourses = createResource({
+	url: 'lms.lms.api.get_my_courses',
+	auto: !isAdmin.value ? true : false,
+})
+
+const createdCourses = createResource({
+	url: 'lms.lms.api.get_created_courses',
+	auto: isAdmin.value ? true : false,
+})
+
+// Unified courses - depends on role
+const courses = computed(() => {
+	if (isAdmin.value) {
+		return createdCourses
+	}
+	return myCourses
+})
+
 const adminEvals = createResource({
 	url: 'lms.lms.api.get_admin_evals',
 	auto: isAdmin.value ? true : false,
+})
+
+// Unified evals
+const evals = computed(() => {
+	return adminEvals
 })
 
 const streakInfo = createResource({
@@ -91,54 +123,35 @@ const streakInfo = createResource({
 })
 
 const subtitle = computed(() => {
-	if (isAdmin.value) {
-		let liveClassSuffix =
-			adminLiveClasses.data?.length > 1 ? __('live classes') : __('live class')
-		let evalSuffix =
-			adminEvals.data?.length > 1 ? __('evaluations') : __('evaluation')
-		if (adminLiveClasses.data?.length > 0 && adminEvals.data?.length > 0) {
-			return __('You have {0} upcoming {1} and {2} {3} scheduled.').format(
-				adminLiveClasses.data.length,
-				liveClassSuffix,
-				adminEvals.data.length,
-				evalSuffix
-			)
-		} else if (adminLiveClasses.data?.length > 0) {
-			return __('You have {0} upcoming {1}.').format(
-				adminLiveClasses.data.length,
-				liveClassSuffix
-			)
-		} else if (adminEvals.data?.length > 0) {
-			return __('You have {0} {1} scheduled.').format(
-				adminEvals.data.length,
-				evalSuffix
-			)
-		}
-		return __('Manage your courses and batches at a glance')
-	} else {
-		let liveClassSuffix =
-			myLiveClasses.data?.length > 1 ? __('live classes') : __('live class')
-		let evalSuffix = evalCount.value > 1 ? __('evaluations') : __('evaluation')
-		if (myLiveClasses.data?.length > 0 && evalCount.value > 0) {
-			return __('You have {0} upcoming {1} and {2} {3} scheduled.').format(
-				myLiveClasses.data.length,
-				liveClassSuffix,
-				evalCount.value,
-				evalSuffix
-			)
-		} else if (myLiveClasses.data?.length > 0) {
-			return __('You have {0} upcoming {1}.').format(
-				myLiveClasses.data.length,
-				liveClassSuffix
-			)
-		} else if (evalCount.value > 0) {
-			return __('You have {0} {1} scheduled.').format(
-				evalCount.value,
-				evalSuffix
-			)
-		}
-		return __('Resume where you left off')
+	const liveClassCount = liveClasses.value?.data?.length || 0
+	const evalCountValue = isAdmin.value ? (adminEvals.data?.length || 0) : evalCount.value
+
+	let liveClassSuffix = liveClassCount > 1 ? __('live classes') : __('live class')
+	let evalSuffix = evalCountValue > 1 ? __('evaluations') : __('evaluation')
+
+	if (liveClassCount > 0 && evalCountValue > 0) {
+		return __('You have {0} upcoming {1} and {2} {3} scheduled.').format(
+			liveClassCount,
+			liveClassSuffix,
+			evalCountValue,
+			evalSuffix
+		)
+	} else if (liveClassCount > 0) {
+		return __('You have {0} upcoming {1}.').format(
+			liveClassCount,
+			liveClassSuffix
+		)
+	} else if (evalCountValue > 0) {
+		return __('You have {0} {1} scheduled.').format(
+			evalCountValue,
+			evalSuffix
+		)
 	}
+
+	if (isAdmin.value) {
+		return __('Manage your courses and batches at a glance')
+	}
+	return __('Resume where you left off')
 })
 
 usePageMeta(() => {
