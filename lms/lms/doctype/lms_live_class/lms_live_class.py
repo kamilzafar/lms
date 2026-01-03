@@ -194,10 +194,14 @@ def fetch_pending_recordings():
 	# 2. Have ended (at least 10 minutes ago to allow processing time)
 	# 3. Don't have recording available yet
 	# 4. Are not older than 1.5 hours (90 minutes) - max time window for checking
-	
+
+	frappe.logger().info("[Recording Scheduler] Starting fetch_pending_recordings job")
+
 	cutoff_time = datetime.now() - timedelta(minutes=90)  # 1.5 hours = 90 minutes
 	ten_minutes_ago = datetime.now() - timedelta(minutes=10)
-	
+
+	frappe.logger().info(f"[Recording Scheduler] Time window: {cutoff_time} to {ten_minutes_ago}")
+
 	pending_classes = frappe.get_all(
 		"LMS Live Class",
 		filters={
@@ -205,9 +209,13 @@ def fetch_pending_recordings():
 			"recording_available": 0,
 			"meeting_id": ["is", "set"],
 		},
-		fields=["name", "date", "time", "duration"]
+		fields=["name", "date", "time", "duration", "auto_recording", "meeting_id"]
 	)
-	
+
+	frappe.logger().info(f"[Recording Scheduler] Found {len(pending_classes)} live classes with auto_recording enabled and no recording yet")
+
+	enqueued_count = 0
+
 	for live_class in pending_classes:
 		try:
 			# Check if class has ended (at least 10 minutes ago)
@@ -216,10 +224,15 @@ def fetch_pending_recordings():
 				datetime.strptime(str(live_class.time), "%H:%M:%S").time() if isinstance(live_class.time, str) else live_class.time
 			)
 			class_end = class_start + timedelta(minutes=cint(live_class.duration))
-			
+
+			time_since_end = datetime.now() - class_end
+
+			frappe.logger().info(f"[Recording Scheduler] Class {live_class.name}: ended at {class_end}, {time_since_end.total_seconds() / 60:.1f} minutes ago, meeting_id={live_class.meeting_id}")
+
 			# Only try to fetch if class ended at least 10 minutes ago
 			# and not more than 1.5 hours ago (max 90 minutes)
 			if ten_minutes_ago > class_end > cutoff_time:
+				frappe.logger().info(f"[Recording Scheduler] Enqueueing recording fetch for {live_class.name}")
 				# Try to fetch recording
 				frappe.enqueue(
 					'lms.lms.doctype.lms_live_class.lms_live_class.fetch_recording',
@@ -227,104 +240,153 @@ def fetch_pending_recordings():
 					queue='long',
 					timeout=300  # 5 minute timeout
 				)
-		except (ValueError, TypeError):
+				enqueued_count += 1
+			else:
+				frappe.logger().info(f"[Recording Scheduler] Class {live_class.name} outside time window - not enqueueing")
+		except (ValueError, TypeError) as e:
+			frappe.logger().error(f"[Recording Scheduler] Error processing class {live_class.name}: {str(e)}")
 			continue
+
+	frappe.logger().info(f"[Recording Scheduler] Job complete. Enqueued {enqueued_count} recording fetch tasks")
 
 
 @frappe.whitelist()
 def fetch_recording(live_class_name):
 	"""Fetch recording URL from Zoom API for a completed live class"""
 	live_class = frappe.get_doc("LMS Live Class", live_class_name)
-	
+
+	frappe.logger().info(f"[Recording Fetch] Starting fetch for {live_class_name}")
+
 	if not live_class.meeting_id:
+		frappe.logger().error(f"[Recording Fetch] Meeting ID not found for {live_class_name}")
 		frappe.throw(_("Meeting ID not found"))
-	
+
 	if live_class.recording_available:
+		frappe.logger().info(f"[Recording Fetch] Recording already available for {live_class_name}")
 		return {
 			"recording_url": live_class.recording_url,
 			"recording_available": True
 		}
-	
-	headers = {
-		"Authorization": "Bearer " + authenticate(live_class.zoom_account),
-		"content-type": "application/json",
-	}
-	
-	# Get recordings from Zoom API
-	response = None
+
+	frappe.logger().info(f"[Recording Fetch] Meeting ID: {live_class.meeting_id}, Zoom Account: {live_class.zoom_account}")
+
 	try:
-		response = requests.get(
-			f"https://api.zoom.us/v2/meetings/{live_class.meeting_id}/recordings",
-			headers=headers,
-			timeout=30
-		)
-	except requests.exceptions.RequestException as e:
-		# Network error - recording might still be processing
-		return {
-			"recording_available": False,
-			"status": "processing",
-			"message": _("Recording is being processed. Please check back in a few minutes.")
+		token = authenticate(live_class.zoom_account)
+		headers = {
+			"Authorization": "Bearer " + token,
+			"content-type": "application/json",
 		}
-	
-	if response and response.status_code == 200:
-		data = response.json()
-		recordings = data.get("recording_files", [])
-		
-		# If no recordings yet, return status indicating it's still processing
-		if not recordings:
-			return {
-				"recording_available": False,
-				"status": "processing",
-				"message": _("Recording is being processed. Please check back in a few minutes.")
-			}
-		
-		# Find cloud recording (prefer MP4 or shared_screen_with_speaker_view)
-		cloud_recording = None
-		for recording in recordings:
-			# Prefer MP4 format or shared screen with speaker view
-			if recording.get("file_type") == "MP4" or \
-			   recording.get("recording_type") == "shared_screen_with_speaker_view":
-				cloud_recording = recording
-				break
-		
-		# If no MP4 found, get the first available recording
-		if not cloud_recording and recordings:
-			cloud_recording = recordings[0]
-		
-		if cloud_recording:
-			# Get playback URL - prefer play_url over download_url for embedding
-			playback_url = cloud_recording.get("play_url")
-			if not playback_url:
-				# Fallback to download_url if play_url not available
-				playback_url = cloud_recording.get("download_url")
-			
-			password = cloud_recording.get("password", "")
-			
-			if playback_url:
-				# Store the meeting UUID for potential future use
-				meeting_uuid = cloud_recording.get("meeting_id", "")
-				
-				# Update live class with recording info
-				live_class.recording_url = playback_url
-				live_class.recording_password = password
-				live_class.recording_available = 1
-				live_class.save(ignore_permissions=True)
-				
+
+		api_url = f"https://api.zoom.us/v2/meetings/{live_class.meeting_id}/recordings"
+		frappe.logger().info(f"[Recording Fetch] Calling Zoom API: {api_url}")
+
+		# Get recordings from Zoom API
+		response = requests.get(api_url, headers=headers, timeout=30)
+
+		frappe.logger().info(f"[Recording Fetch] Zoom API response status: {response.status_code}")
+
+		if response.status_code == 200:
+			data = response.json()
+			recordings = data.get("recording_files", [])
+			total_size = data.get("total_size", 0)
+			recording_count = data.get("recording_count", 0)
+
+			frappe.logger().info(f"[Recording Fetch] Response: total_size={total_size}, recording_count={recording_count}, files={len(recordings)}")
+
+			# If no recordings yet, return status indicating it's still processing
+			if not recordings:
+				frappe.logger().info(f"[Recording Fetch] No recording files yet - still processing")
 				return {
-					"recording_url": playback_url,
-					"recording_available": True
+					"recording_available": False,
+					"status": "processing",
+					"message": _("Recording is being processed. Please check back in a few minutes.")
 				}
-	
-	# If we get here, recording might still be processing
-	# Check if it's a 404 (meeting not found) or other error
-	if response and response.status_code == 404:
+
+			# Log all recording files found
+			for i, rec in enumerate(recordings):
+				frappe.logger().info(f"[Recording Fetch] File {i}: type={rec.get('file_type')}, recording_type={rec.get('recording_type')}, status={rec.get('status')}, has_play_url={bool(rec.get('play_url'))}")
+
+			# Find cloud recording (prefer MP4 or shared_screen_with_speaker_view)
+			cloud_recording = None
+			for recording in recordings:
+				# Prefer MP4 format or shared screen with speaker view
+				if recording.get("file_type") == "MP4" or \
+				   recording.get("recording_type") == "shared_screen_with_speaker_view":
+					cloud_recording = recording
+					frappe.logger().info(f"[Recording Fetch] Selected recording: type={recording.get('file_type')}, recording_type={recording.get('recording_type')}")
+					break
+
+			# If no MP4 found, get the first available recording
+			if not cloud_recording and recordings:
+				cloud_recording = recordings[0]
+				frappe.logger().info(f"[Recording Fetch] No MP4 found, using first recording: type={cloud_recording.get('file_type')}")
+
+			if cloud_recording:
+				# Get playback URL - prefer play_url over download_url for embedding
+				playback_url = cloud_recording.get("play_url")
+				if not playback_url:
+					# Fallback to download_url if play_url not available
+					playback_url = cloud_recording.get("download_url")
+					frappe.logger().info(f"[Recording Fetch] Using download_url as fallback")
+
+				password = cloud_recording.get("password", "")
+
+				if playback_url:
+					# Store the meeting UUID for potential future use
+					meeting_uuid = cloud_recording.get("meeting_id", "")
+
+					frappe.logger().info(f"[Recording Fetch] Got playback URL, updating live class {live_class_name}")
+
+					# Update live class with recording info
+					live_class.recording_url = playback_url
+					live_class.recording_password = password
+					live_class.recording_available = 1
+					live_class.save(ignore_permissions=True)
+
+					frappe.logger().info(f"[Recording Fetch] Successfully saved recording for {live_class_name}")
+
+					return {
+						"recording_url": playback_url,
+						"recording_available": True
+					}
+				else:
+					frappe.logger().warning(f"[Recording Fetch] No playback URL found in recording file")
+			else:
+				frappe.logger().warning(f"[Recording Fetch] No suitable cloud recording found")
+
+		elif response.status_code == 404:
+			frappe.logger().warning(f"[Recording Fetch] Zoom API returned 404 - recording not found or still processing")
+			try:
+				error_data = response.json()
+				frappe.logger().warning(f"[Recording Fetch] Error details: {error_data}")
+			except:
+				frappe.logger().warning(f"[Recording Fetch] Could not parse error response")
+
+		else:
+			frappe.logger().error(f"[Recording Fetch] Zoom API returned status {response.status_code}")
+			try:
+				error_data = response.json()
+				frappe.logger().error(f"[Recording Fetch] Error response: {error_data}")
+			except:
+				frappe.logger().error(f"[Recording Fetch] Response text: {response.text}")
+
+	except requests.exceptions.RequestException as e:
+		frappe.logger().error(f"[Recording Fetch] Network error: {str(e)}")
 		return {
 			"recording_available": False,
 			"status": "processing",
 			"message": _("Recording is being processed. Please check back in a few minutes.")
 		}
-	
+	except Exception as e:
+		frappe.logger().error(f"[Recording Fetch] Unexpected error: {str(e)}")
+		return {
+			"recording_available": False,
+			"status": "error",
+			"message": _("Error fetching recording. Please try again later.")
+		}
+
 	# Default: recording is still processing
+	frappe.logger().info(f"[Recording Fetch] Recording still processing for {live_class_name}")
 	return {
 		"recording_available": False,
 		"status": "processing",
