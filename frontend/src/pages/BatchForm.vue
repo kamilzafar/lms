@@ -411,6 +411,18 @@ const meta = reactive({
 
 onMounted(() => {
 	if (!user.data) window.location.href = '/login'
+
+	// Teachers cannot create or edit batches - only Admin, Content Maker, Moderator, Evaluator can
+	const canManageBatch = user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
+	if (user.data?.is_teacher && !canManageBatch) {
+		router.push({ name: 'Batches' })
+		return
+	}
+	if (!canManageBatch) {
+		router.push({ name: 'Batches' })
+		return
+	}
+
 	if (props.batchName != 'new') {
 		fetchBatchInfo()
 	} else {

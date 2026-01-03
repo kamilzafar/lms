@@ -1,5 +1,5 @@
 <template>
-	<div v-if="isAdmin || isStudent" class="">
+	<div v-if="isAdmin || isStudent || isTeacher" class="">
 		<header
 			class="sticky top-0 z-10 flex items-center justify-between border-b bg-surface-white px-3 py-2.5 sm:px-5"
 		>
@@ -385,15 +385,23 @@ watch(tabIndex, () => {
 })
 
 const canMakeAnnouncement = () => {
+	// Teachers cannot make announcements - only Admin, Content Maker, Moderator, Evaluator can
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator) {
+		return false
+	}
 	if (readOnlyMode) return false
-
 	if (!batch.data?.students?.length) return false
-
-	return user.data?.is_moderator || user.data?.is_evaluator
+	return isAdmin.value
 }
 
 const isAdmin = computed(() => {
-	return user.data?.is_moderator || user.data?.is_evaluator
+	// Admin, Content Maker, Moderator, Evaluator can manage batches
+	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
+})
+
+const isTeacher = computed(() => {
+	// Teachers can view but not manage - check they're not also an admin
+	return user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator && !user.data?.is_evaluator
 })
 
 usePageMeta(() => {

@@ -165,21 +165,29 @@ const openLiveClassModal = () => {
 }
 
 const canCreateClass = () => {
-	// Teachers cannot create live classes, only Content Makers (moderators/evaluators) can
-	if (user.data?.is_teacher) return false
+	// Only Admin, Content Maker (Course Creator), Moderator, Evaluator can create live classes
+	// Teachers CANNOT create live classes
+	if (user.data?.is_teacher && !user.data?.is_moderator && !user.data?.is_instructor && !user.data?.is_system_manager) {
+		return false
+	}
 	if (readOnlyMode) return false
 	if (!props.zoomAccount) return false
-	return hasPermission()
+	return canManageClass()
+}
+
+const canManageClass = () => {
+	// Admin, Content Maker (Course Creator), Moderator, and Evaluator can manage (create/edit/delete) live classes
+	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
 }
 
 const hasPermission = () => {
-	// Moderators, evaluators, and teachers can view/manage live classes
-	return user.data?.is_moderator || user.data?.is_evaluator || user.data?.is_teacher
+	// Anyone who can manage OR teachers can view live class details
+	return canManageClass() || user.data?.is_teacher
 }
 
 const canStartClass = () => {
-	// Teachers can start classes (but not create/delete them)
-	return user.data?.is_moderator || user.data?.is_evaluator || user.data?.is_teacher
+	// Admin, Content Maker, Moderator, Evaluator, and Teachers can start classes
+	return canManageClass() || user.data?.is_teacher
 }
 
 const canAccessClass = (cls) => {
