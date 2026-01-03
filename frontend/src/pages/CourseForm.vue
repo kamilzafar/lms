@@ -410,8 +410,11 @@ const meta = reactive({
 })
 
 onMounted(() => {
-	if (!user.data?.is_moderator && !user.data?.is_instructor) {
+	// Teachers (LMS Teacher role) cannot create or edit courses
+	// Only Content Makers (Course Creator) and Moderators can
+	if (user.data?.is_teacher || (!user.data?.is_moderator && !user.data?.is_instructor)) {
 		router.push({ name: 'Courses' })
+		return
 	}
 
 	if (props.courseName !== 'new') {

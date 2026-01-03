@@ -11,6 +11,8 @@ export interface User {
         is_system_manager: boolean
         is_evaluator: boolean
         is_instructor: boolean
+        is_teacher: boolean
+        is_student: boolean
         is_fc_site: boolean
     }
 }

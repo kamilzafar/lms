@@ -270,11 +270,12 @@ onMounted(() => {
 	// Set default tab based on user role
 	// Use is_student from API which checks for LMS Student role
 	const isAdmin = user.data?.is_system_manager
-	const isInstructorOrModerator = user.data && 
+	const isInstructorOrModerator = user.data &&
 		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator) &&
 		!isAdmin
 	const isStudent = user.data?.is_student && !isAdmin
-	
+	const isTeacher = user.data?.is_teacher && !isAdmin && !user.data?.is_moderator && !user.data?.is_instructor
+
 	// Admins get all tabs - check admin first
 	if (isAdmin) {
 		// Admins default to All tab
@@ -289,6 +290,12 @@ onMounted(() => {
 		} else if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
 			// Default to Enrolled if no tab specified
 			currentTab.value = 'Enrolled'
+		}
+	} else if (isTeacher) {
+		// Teachers can access Assigned and Live tabs
+		const validTeacherTabs = ['Assigned', 'Live']
+		if (!validTeacherTabs.includes(currentTab.value)) {
+			currentTab.value = 'Assigned'
 		}
 	} else if (isInstructorOrModerator) {
 		// Instructors/moderators can only access Created tab
@@ -411,6 +418,7 @@ const updateCertificationFilter = () => {
 const updateTabFilter = () => {
 	delete filters.value['live']
 	delete filters.value['created']
+	delete filters.value['assigned']
 	delete filters.value['published_on']
 	delete filters.value['upcoming']
 	delete filters.value['recorded']
@@ -433,13 +441,19 @@ const updateTabFilter = () => {
 		filters.value['created'] = 1
 		delete filters.value['published']
 		delete filters.value['enrolled']
+	} else if (currentTab.value == 'Assigned' && user.data?.is_teacher) {
+		// For teachers, show courses they are assigned to (uses same backend filter as created)
+		filters.value['created'] = 1
+		delete filters.value['published']
+		delete filters.value['enrolled']
 	} else {
 		delete filters.value['published']
 		delete filters.value['enrolled']
 
 		if (currentTab.value == 'Live') {
 			// For students, we show live classes directly, not courses
-			// For non-students (admins), show live courses
+			// For teachers, show live courses from their assigned courses
+			// For non-students/non-teachers (admins), show live courses
 			if (!user.data?.is_student) {
 				filters.value['published'] = 1
 				filters.value['upcoming'] = 0
@@ -572,7 +586,8 @@ const courseTabs = computed(() => {
 	
 	// Use is_student from API which checks for LMS Student role
 	const isStudent = user.data?.is_student
-	
+	const isTeacher = user.data?.is_teacher
+
 	if (isStudent) {
 		// Students see Enrolled, Live, and Recording tabs
 		return [
@@ -587,8 +602,20 @@ const courseTabs = computed(() => {
 			},
 		]
 	}
-	
-	// For instructors, moderators, and evaluators - only show Created tab
+
+	// For teachers - show Assigned courses and Live classes tabs (view-only, can start live classes)
+	if (isTeacher && !user.data?.is_moderator && !user.data?.is_instructor) {
+		return [
+			{
+				label: __('Assigned'),
+			},
+			{
+				label: __('Live'),
+			},
+		]
+	}
+
+	// For instructors (Content Makers), moderators, and evaluators - show Created tab
 	if (
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
@@ -600,7 +627,7 @@ const courseTabs = computed(() => {
 			},
 		]
 	}
-	
+
 	// Fallback (should not reach here for logged-in users)
 	return [
 		{

@@ -683,9 +683,11 @@ export const sanitizeHTML = (text) => {
 
 export const canCreateCourse = () => {
 	const { userResource } = usersStore()
+	// Teachers (LMS Teacher role) cannot create courses - only Content Makers (Course Creator) and Moderators can
 	return (
 		!readOnlyMode &&
-		(userResource.data?.is_instructor || userResource.data?.is_moderator)
+		(userResource.data?.is_instructor || userResource.data?.is_moderator) &&
+		!userResource.data?.is_teacher
 	)
 }
 

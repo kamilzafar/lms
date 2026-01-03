@@ -352,6 +352,26 @@ def has_student_role(member=None):
 	)
 
 
+def has_teacher_role(member=None):
+	"""Check if user has LMS Teacher role."""
+	return frappe.db.get_value(
+		"Has Role",
+		{"parent": member or frappe.session.user, "role": "LMS Teacher"},
+		"name",
+	)
+
+
+def is_teacher_of_course(course, member=None):
+	"""Check if user is assigned as instructor/teacher of a specific course."""
+	if not member:
+		member = frappe.session.user
+	instructors = get_instructors("LMS Course", course)
+	for instructor in instructors:
+		if instructor.name == member:
+			return True
+	return False
+
+
 def get_courses_under_review():
 	return frappe.get_all(
 		"LMS Course",
@@ -760,18 +780,31 @@ def update_course_filters(filters):
 	# Filter courses by creator for instructors and moderators
 	# They should only see courses they created
 	# Students should only see enrolled courses and live courses
+	# Teachers should only see courses they are assigned to
 	if frappe.session.user and frappe.session.user != "Guest":
 		roles = frappe.get_roles(frappe.session.user)
 		is_instructor = "Course Creator" in roles
 		is_moderator = "Moderator" in roles
 		is_evaluator = "Batch Evaluator" in roles
 		is_system_manager = "System Manager" in roles
-		
+		is_teacher = "LMS Teacher" in roles
+
 		# Check if user is a student using LMS Student role
 		is_student = "LMS Student" in roles
-		
+
+		# Apply filter for teachers - only see courses they are assigned to
+		if is_teacher and not is_system_manager and not is_moderator and not is_instructor:
+			assigned_courses = frappe.get_all(
+				"Course Instructor", {"instructor": frappe.session.user}, pluck="parent"
+			)
+			if assigned_courses:
+				filters.update({"name": ["in", assigned_courses]})
+			else:
+				# If they have no assigned courses, return empty result
+				filters.update({"name": ["in", []]})
+
 		# Apply filter for instructors and moderators (but not system managers)
-		if (is_instructor or is_moderator) and not is_system_manager:
+		elif (is_instructor or is_moderator) and not is_system_manager:
 			created_courses = frappe.get_all(
 				"Course Instructor", {"instructor": frappe.session.user}, pluck="parent"
 			)
@@ -2145,6 +2178,28 @@ def get_batches(filters=None, start=0, order_by="start_date"):
 		)
 		filters.update({"name": ["in", enrolled_batches]})
 		del filters["enrolled"]
+
+	# Handle "assigned" filter for teachers - show batches for courses they're assigned to
+	if filters.get("assigned"):
+		# Get courses the teacher is assigned to
+		assigned_courses = frappe.get_all(
+			"Course Instructor", {"instructor": frappe.session.user}, pluck="parent"
+		)
+		if assigned_courses:
+			# Get batches that have these courses
+			assigned_batches = frappe.get_all(
+				"Batch Course",
+				{"course": ["in", assigned_courses]},
+				pluck="parent",
+				distinct=True
+			)
+			if assigned_batches:
+				filters.update({"name": ["in", assigned_batches]})
+			else:
+				filters.update({"name": ["in", []]})
+		else:
+			filters.update({"name": ["in", []]})
+		del filters["assigned"]
 
 	batches = frappe.get_all(
 		"LMS Batch",

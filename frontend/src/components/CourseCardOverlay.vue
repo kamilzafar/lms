@@ -100,7 +100,7 @@
 					</template>
 				</Button>
 				<router-link
-					v-if="user?.data?.is_moderator || is_instructor()"
+					v-if="canEditCourse()"
 					:to="{
 						name: 'CourseForm',
 						params: {
@@ -258,6 +258,12 @@ const is_instructor = () => {
 		}
 	})
 	return user_is_instructor
+}
+
+const canEditCourse = () => {
+	// Teachers cannot edit courses, only Content Makers (Course Creator) and Moderators can
+	if (user.data?.is_teacher) return false
+	return user.data?.is_moderator || is_instructor()
 }
 
 const canGetCertificate = computed(() => {

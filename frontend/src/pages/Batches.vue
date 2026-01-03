@@ -157,7 +157,8 @@ const certification = ref(false)
 const filters = ref({})
 const isAdmin = computed(() => user.data?.is_system_manager)
 const is_student = computed(() => user.data?.is_student && !isAdmin.value)
-const currentTab = ref(is_student.value ? 'Enrolled' : 'Upcoming')
+const is_teacher = computed(() => user.data?.is_teacher && !isAdmin.value && !user.data?.is_moderator && !user.data?.is_instructor)
+const currentTab = ref(is_student.value ? 'Enrolled' : (is_teacher.value ? 'Assigned' : 'Upcoming'))
 const orderBy = ref('start_date')
 const readOnlyMode = window.read_only_mode
 const router = useRouter()
@@ -174,8 +175,13 @@ onMounted(() => {
 		if (currentTab.value !== 'Enrolled') {
 			currentTab.value = 'Enrolled'
 		}
+	} else if (is_teacher.value) {
+		// Teachers default to Assigned tab
+		if (currentTab.value !== 'Assigned') {
+			currentTab.value = 'Assigned'
+		}
 	}
-	
+
 	setFiltersFromQuery()
 	updateBatches()
 	categories.value = [
@@ -261,12 +267,21 @@ const updateTabFilter = () => {
 		filters.value['enrolled'] = 1
 		delete filters.value['start_date']
 		delete filters.value['published']
+		delete filters.value['assigned']
+		orderBy.value = 'start_date desc'
+	} else if (currentTab.value == 'Assigned' && is_teacher.value) {
+		// For teachers, show batches for courses they're assigned to
+		filters.value['assigned'] = 1
+		delete filters.value['start_date']
+		delete filters.value['published']
+		delete filters.value['enrolled']
 		orderBy.value = 'start_date desc'
 	} else if (is_student.value) {
 		delete filters.value['enrolled']
 	} else {
 		delete filters.value['start_date']
 		delete filters.value['published']
+		delete filters.value['assigned']
 		orderBy.value = 'start_date desc'
 		if (currentTab.value == 'Upcoming') {
 			filters.value['start_date'] = ['>=', dayjs().format('YYYY-MM-DD')]
@@ -347,7 +362,14 @@ const batchTabs = computed(() => {
 		]
 	}
 
-	// For instructors/moderators/evaluators
+	// For teachers - show Assigned tab (batches for courses they're assigned to)
+	if (is_teacher.value) {
+		return [
+			{ label: __('Assigned') },
+		]
+	}
+
+	// For instructors/moderators/evaluators (Content Makers)
 	if (
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
@@ -370,6 +392,8 @@ const batchTabs = computed(() => {
 })
 
 const canCreateBatch = () => {
+	// Teachers cannot create batches, only Content Makers can
+	if (user.data?.is_teacher) return false
 	if (readOnlyMode) return false
 	if (
 		user.data?.is_moderator ||

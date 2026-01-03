@@ -25,10 +25,11 @@ def create_lms_roles():
 	create_moderator_role()
 	create_evaluator_role()
 	create_lms_student_role()
+	create_lms_teacher_role()
 
 
 def delete_lms_roles():
-	roles = ["Course Creator", "Moderator"]
+	roles = ["Course Creator", "Moderator", "LMS Teacher"]
 	for role in roles:
 		if frappe.db.exists("Role", role):
 			frappe.db.delete("Role", role)
@@ -87,6 +88,22 @@ def create_lms_student_role():
 		role.update(
 			{
 				"role_name": "LMS Student",
+				"home_page": "",
+				"desk_access": 0,
+			}
+		)
+		role.save()
+
+
+def create_lms_teacher_role():
+	"""Create LMS Teacher role - can view assigned courses and start live classes only."""
+	if frappe.db.exists("Role", "LMS Teacher"):
+		frappe.db.set_value("Role", "LMS Teacher", "desk_access", 0)
+	else:
+		role = frappe.new_doc("Role")
+		role.update(
+			{
+				"role_name": "LMS Teacher",
 				"home_page": "",
 				"desk_access": 0,
 			}
