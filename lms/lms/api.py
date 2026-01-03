@@ -2581,7 +2581,7 @@ def get_upcoming_batches():
 # ZOOM WEBHOOK HANDLER
 # ============================================================================
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
 def zoom_webhook():
 	"""
 	Handle Zoom webhook events for recording notifications.
@@ -2596,6 +2596,9 @@ def zoom_webhook():
 	"""
 	import hashlib
 	import hmac
+
+	# Bypass CSRF for webhook endpoints
+	frappe.flags.ignore_csrf = True
 
 	try:
 		# Get request data
@@ -2648,7 +2651,7 @@ def zoom_webhook():
 		return {"status": "error", "message": str(e)}
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
 def zoom_webhook_n8n():
 	"""
 	Dedicated endpoint for n8n to forward Zoom webhooks.
@@ -2658,6 +2661,8 @@ def zoom_webhook_n8n():
 
 	Webhook URL: /api/method/lms.lms.api.zoom_webhook_n8n
 	"""
+	# Bypass CSRF for webhook endpoints
+	frappe.flags.ignore_csrf = True
 	try:
 		# Get request data
 		payload = None
