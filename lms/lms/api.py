@@ -48,7 +48,7 @@ def get_user_info():
 	user.is_instructor = "Course Creator" in user.roles
 	user.is_moderator = "Moderator" in user.roles
 	user.is_evaluator = "Batch Evaluator" in user.roles
-	user.is_student = not user.is_instructor and not user.is_moderator and not user.is_evaluator
+	user.is_student = "LMS Student" in user.roles
 	user.is_fc_site = is_fc_site()
 	user.is_system_manager = "System Manager" in user.roles
 	user.sitename = frappe.local.site
@@ -1761,6 +1761,71 @@ def get_my_live_classes():
 			my_live_classes.append(live_class)
 
 	return my_live_classes
+
+
+@frappe.whitelist()
+def get_all_my_live_classes():
+	"""Get all live classes for enrolled students (for Live tab in Courses page)"""
+	all_live_classes = []
+	if frappe.session.user == "Guest":
+		return all_live_classes
+
+	# Get enrolled batches
+	enrolled_batches = frappe.get_all(
+		"LMS Batch Enrollment",
+		{"member": frappe.session.user},
+		pluck="batch"
+	)
+
+	if not enrolled_batches:
+		return all_live_classes
+
+	# Get all live classes from enrolled batches (current or upcoming)
+	live_class_details = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"date": [">=", getdate()],
+			"batch_name": ["in", enrolled_batches],
+		},
+		fields=[
+			"name",
+			"title",
+			"description",
+			"time",
+			"date",
+			"duration",
+			"attendees",
+			"start_url",
+			"join_url",
+			"owner",
+			"batch_name",
+		],
+		order_by="date asc",
+	)
+
+	# Get batch and course information for each live class
+	for live_class in live_class_details:
+		# Get batch details
+		batch = frappe.get_doc("LMS Batch", live_class.batch_name)
+		live_class.batch_title = batch.title
+		
+		# Get course from batch
+		batch_courses = frappe.get_all(
+			"Batch Course",
+			{"parent": live_class.batch_name},
+			pluck="course",
+			limit=1
+		)
+		
+		if batch_courses:
+			course = frappe.get_doc("LMS Course", batch_courses[0])
+			live_class.course_name = course.name
+			live_class.course_title = course.title
+			live_class.course_image = course.image
+		
+		all_live_classes.append(live_class)
+
+	return all_live_classes
 
 
 @frappe.whitelist()

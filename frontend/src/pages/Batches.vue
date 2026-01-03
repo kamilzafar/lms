@@ -156,12 +156,17 @@ const title = ref('')
 const certification = ref(false)
 const filters = ref({})
 const is_student = computed(() => user.data?.is_student)
-const currentTab = ref(is_student.value ? 'All' : 'Upcoming')
+const currentTab = ref(is_student.value ? 'Enrolled' : 'Upcoming')
 const orderBy = ref('start_date')
 const readOnlyMode = window.read_only_mode
 const router = useRouter()
 
 onMounted(() => {
+	// Ensure students default to Enrolled tab
+	if (user.data?.is_student && currentTab.value !== 'Enrolled') {
+		currentTab.value = 'Enrolled'
+	}
+	
 	setFiltersFromQuery()
 	updateBatches()
 	categories.value = [
@@ -314,24 +319,35 @@ watch(currentTab, () => {
 })
 
 const batchTabs = computed(() => {
-	let tabs = [
-		{
-			label: __('All'),
-		},
-	]
+	// For students, only show Enrolled tab
+	if (user.data?.is_student) {
+		return [
+			{
+				label: __('Enrolled'),
+			},
+		]
+	}
 
+	// For instructors/moderators/evaluators
 	if (
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
 		user.data?.is_evaluator
 	) {
-		tabs.push({ label: __('Upcoming') })
-		tabs.push({ label: __('Archived') })
-		tabs.push({ label: __('Unpublished') })
-	} else if (user.data) {
-		tabs.push({ label: __('Enrolled') })
+		return [
+			{ label: __('All') },
+			{ label: __('Upcoming') },
+			{ label: __('Archived') },
+			{ label: __('Unpublished') },
+		]
 	}
-	return tabs
+
+	// For other users (guests, etc.)
+	return [
+		{
+			label: __('All'),
+		},
+	]
 })
 
 const canCreateBatch = () => {

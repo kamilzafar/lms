@@ -88,8 +88,73 @@
 				/>
 			</div>
 		</div>
-		<!-- Recorded Lectures Section (only for Recorded tab) -->
-		<div v-if="currentTab === 'Recorded' && recordedLectures.data?.length" class="mb-10">
+		<!-- Live Classes Section (only for Live tab for students) -->
+		<div v-if="currentTab === 'Live' && user.data?.is_student && liveClasses.data?.length" class="mb-10">
+			<div class="text-lg font-semibold text-ink-gray-9 mb-5">
+				{{ __('Live Classes') }}
+			</div>
+			<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+				<div
+					v-for="cls in liveClasses.data"
+					:key="cls.name"
+					class="flex flex-col border rounded-md h-full text-ink-gray-7 hover:border-outline-gray-3 p-4"
+					:class="{
+						'cursor-pointer': canAccessClass(cls),
+					}"
+				>
+					<div class="font-semibold text-ink-gray-9 text-lg mb-1">
+						{{ cls.title }}
+					</div>
+					<div v-if="cls.batch_title" class="text-sm text-ink-gray-7 mb-2">
+						{{ cls.batch_title }}
+					</div>
+					<div v-if="cls.description" class="short-introduction text-sm mb-3">
+						{{ cls.description }}
+					</div>
+					<div class="mt-auto space-y-2">
+						<div class="flex items-center space-x-2 text-sm">
+							<Calendar class="w-4 h-4 stroke-1.5" />
+							<span>
+								{{ dayjs(cls.date).format('DD MMMM YYYY') }}
+							</span>
+						</div>
+						<div class="flex items-center space-x-2 text-sm">
+							<Clock class="w-4 h-4 stroke-1.5" />
+							<span>
+								{{ dayjs(getClassStart(cls)).format('hh:mm A') }} -
+								{{ dayjs(getClassEnd(cls)).format('hh:mm A') }}
+							</span>
+						</div>
+						<div
+							v-if="canAccessClass(cls)"
+							class="flex items-center space-x-2 text-ink-gray-9 mt-3"
+						>
+							<a
+								v-if="cls.join_url"
+								:href="cls.join_url"
+								target="_blank"
+								class="w-full cursor-pointer inline-flex items-center justify-center gap-2 transition-colors focus:outline-none text-ink-gray-8 bg-surface-gray-2 hover:bg-surface-gray-3 active:bg-surface-gray-4 focus-visible:ring focus-visible:ring-outline-gray-3 h-8 text-sm px-3 rounded"
+							>
+								<Video class="h-4 w-4 stroke-1.5" />
+								{{ __('Join') }}
+							</a>
+						</div>
+						<div
+							v-else-if="hasClassEnded(cls)"
+							class="flex items-center space-x-2 text-ink-amber-3 text-sm mt-3"
+						>
+							<Info class="w-4 h-4 stroke-1.5" />
+							<span>
+								{{ __('Ended') }}
+							</span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Recorded Lectures Section (only for Recording tab) -->
+		<div v-if="currentTab === 'Recording' && recordedLectures.data?.length" class="mb-10">
 			<div class="text-lg font-semibold text-ink-gray-9 mb-5">
 				{{ __('Recorded Lectures') }}
 			</div>
@@ -111,7 +176,7 @@
 
 		<!-- Courses Section -->
 		<div
-			v-if="courses.data?.length && currentTab !== 'Recorded'"
+			v-if="courses.data?.length && currentTab !== 'Recording' && !(currentTab === 'Live' && user.data?.is_student)"
 			class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-8"
 		>
 			<router-link
@@ -121,10 +186,11 @@
 				<CourseCard :course="course" />
 			</router-link>
 		</div>
-		<EmptyState v-else-if="!courses.list.loading && currentTab !== 'Recorded'" type="Courses" />
-		<EmptyState v-else-if="currentTab === 'Recorded' && !recordedLectures.list.loading && !recordedLectures.data?.length" type="Courses" />
+		<EmptyState v-else-if="!courses.list.loading && currentTab !== 'Recording' && !(currentTab === 'Live' && user.data?.is_student)" type="Courses" />
+		<EmptyState v-else-if="currentTab === 'Recording' && !recordedLectures.list.loading && !recordedLectures.data?.length" type="Courses" />
+		<EmptyState v-else-if="currentTab === 'Live' && user.data?.is_student && !liveClasses.list.loading && !liveClasses.data?.length" type="Courses" />
 		<div
-			v-if="!courses.list.loading && courses.hasNextPage && currentTab !== 'Recorded'"
+			v-if="!courses.list.loading && courses.hasNextPage && currentTab !== 'Recording' && !(currentTab === 'Live' && user.data?.is_student)"
 			class="flex justify-center mt-5"
 		>
 			<Button @click="courses.next()">
@@ -165,7 +231,7 @@ import {
 	usePageMeta,
 } from 'frappe-ui'
 import { computed, inject, onMounted, ref, watch } from 'vue'
-import { ChevronDown, Plus } from 'lucide-vue-next'
+import { ChevronDown, Plus, Calendar, Clock, Video, Info } from 'lucide-vue-next'
 import { sessionStore } from '@/stores/session'
 import { canCreateCourse } from '@/utils'
 import CourseCard from '@/components/CourseCard.vue'
@@ -194,18 +260,24 @@ const recordedLectures = createListResource({
 	auto: false,
 })
 
+const liveClasses = createListResource({
+	doctype: 'LMS Live Class',
+	url: 'lms.lms.api.get_all_my_live_classes',
+	auto: false,
+})
+
 onMounted(() => {
 	// Set default tab based on user role
-	const isStudent = user.data && 
-		!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	// Use is_student from API which checks for LMS Student role
+	const isStudent = user.data?.is_student
 	const isInstructorOrModerator = user.data && 
 		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator) &&
 		!user.data?.is_system_manager
 	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
-		// Students can access Enrolled, Live, and Recorded tabs
-		const validStudentTabs = ['Enrolled', 'Live', 'Recorded']
+		// Students can access Enrolled, Live, and Recording tabs
+		const validStudentTabs = ['Enrolled', 'Live', 'Recording']
 		if (!validStudentTabs.includes(currentTab.value)) {
 			currentTab.value = 'Enrolled'
 		} else if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
@@ -350,8 +422,8 @@ const updateTabFilter = () => {
 	} else if (currentTab.value == 'Enrolled' && user.data?.is_student) {
 		filters.value['enrolled'] = 1
 		delete filters.value['published']
-	} else if (currentTab.value == 'Recorded' && user.data?.is_student) {
-		// Recorded tab - show courses with recorded lectures for enrolled students
+	} else if (currentTab.value == 'Recording' && user.data?.is_student) {
+		// Recording tab - show courses with recorded lectures for enrolled students
 		filters.value['recorded'] = 1
 		delete filters.value['published']
 		delete filters.value['enrolled']
@@ -365,9 +437,13 @@ const updateTabFilter = () => {
 		delete filters.value['enrolled']
 
 		if (currentTab.value == 'Live') {
-			filters.value['published'] = 1
-			filters.value['upcoming'] = 0
-			filters.value['live'] = 1
+			// For students, we show live classes directly, not courses
+			// For non-students (admins), show live courses
+			if (!user.data?.is_student) {
+				filters.value['published'] = 1
+				filters.value['upcoming'] = 0
+				filters.value['live'] = 1
+			}
 		} else if (currentTab.value == 'Upcoming') {
 			filters.value['upcoming'] = 1
 		} else if (currentTab.value == 'New') {
@@ -426,13 +502,39 @@ const updateCategories = (data) => {
 }
 
 watch(currentTab, () => {
-	if (currentTab.value === 'Recorded') {
-		// Load recorded lectures when Recorded tab is selected
+	if (currentTab.value === 'Recording') {
+		// Load recorded lectures when Recording tab is selected
 		recordedLectures.reload()
+	} else if (currentTab.value === 'Live' && user.data?.is_student) {
+		// Load live classes when Live tab is selected for students
+		liveClasses.reload()
 	} else {
 		updateCourses()
 	}
 })
+
+// Helper functions for live classes
+const getClassStart = (cls) => {
+	return new Date(`${cls.date}T${cls.time}`)
+}
+
+const getClassEnd = (cls) => {
+	const classStart = getClassStart(cls)
+	return new Date(classStart.getTime() + cls.duration * 60000)
+}
+
+const hasClassEnded = (cls) => {
+	const classEnd = getClassEnd(cls)
+	const now = new Date()
+	return now > classEnd
+}
+
+const canAccessClass = (cls) => {
+	if (cls.date < dayjs().format('YYYY-MM-DD')) return false
+	if (cls.date > dayjs().format('YYYY-MM-DD')) return false
+	if (hasClassEnded(cls)) return false
+	return true
+}
 
 const openRecordingModal = (lecture) => {
 	currentRecording.value = lecture
@@ -440,13 +542,12 @@ const openRecordingModal = (lecture) => {
 }
 
 const courseTabs = computed(() => {
-	// Check if user is a student (not moderator, instructor, or evaluator)
-	const isStudent = user.data && 
-	!(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator)
+	// Use is_student from API which checks for LMS Student role
+	const isStudent = user.data?.is_student
 	const isAdmin = user.data?.is_system_manager
 	
 	if (isStudent) {
-		// Students see Enrolled, Live, and Recorded tabs
+		// Students see Enrolled, Live, and Recording tabs
 		return [
 			{
 				label: __('Enrolled'),
@@ -455,7 +556,7 @@ const courseTabs = computed(() => {
 				label: __('Live'),
 			},
 			{
-				label: __('Recorded'),
+				label: __('Recording'),
 			},
 		]
 	}
@@ -519,3 +620,14 @@ usePageMeta(() => {
 	}
 })
 </script>
+<style scoped>
+.short-introduction {
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	text-overflow: ellipsis;
+	width: 100%;
+	overflow: hidden;
+	line-height: 1.5;
+}
+</style>

@@ -767,8 +767,8 @@ def update_course_filters(filters):
 		is_evaluator = "Batch Evaluator" in roles
 		is_system_manager = "System Manager" in roles
 		
-		# Check if user is a student (not instructor, moderator, evaluator, or system manager)
-		is_student = not (is_instructor or is_moderator or is_evaluator or is_system_manager)
+		# Check if user is a student using LMS Student role
+		is_student = "LMS Student" in roles
 		
 		# Apply filter for instructors and moderators (but not system managers)
 		if (is_instructor or is_moderator) and not is_system_manager:
@@ -893,8 +893,105 @@ def update_course_filters(filters):
 		del filters["created"]
 
 	if filters.get("live"):
-		filters.update({"featured": 0})
-		show_featured = True
+		# For students, only show courses with live classes in enrolled batches
+		if frappe.session.user and frappe.session.user != "Guest":
+			roles = frappe.get_roles(frappe.session.user)
+			is_student = "LMS Student" in roles
+			
+			if is_student:
+				# Get enrolled batches
+				enrolled_batches = frappe.get_all(
+					"LMS Batch Enrollment",
+					{"member": frappe.session.user},
+					pluck="batch"
+				)
+				
+				if enrolled_batches:
+					# Get live classes from enrolled batches (current or upcoming)
+					live_classes = frappe.get_all(
+						"LMS Live Class",
+						filters={
+							"batch_name": ["in", enrolled_batches],
+							"date": [">=", getdate()],
+						},
+						pluck="batch_name",
+						distinct=True
+					)
+					
+					if live_classes:
+						# Get courses from batches with live classes
+						courses_from_batches = frappe.get_all(
+							"Batch Course",
+							{"parent": ["in", live_classes]},
+							pluck="course",
+							distinct=True
+						)
+						
+						# Also get directly enrolled courses that might have live classes
+						enrolled_courses = frappe.get_all(
+							"LMS Enrollment",
+							{"member": frappe.session.user},
+							pluck="course"
+						)
+						
+						# Get batches for enrolled courses and check if they have live classes
+						if enrolled_courses:
+							course_batches = frappe.get_all(
+								"Batch Course",
+								{"course": ["in", enrolled_courses]},
+								pluck="parent",
+								distinct=True
+							)
+							if course_batches:
+								batches_with_live = frappe.get_all(
+									"LMS Live Class",
+									filters={
+										"batch_name": ["in", course_batches],
+										"date": [">=", getdate()],
+									},
+									pluck="batch_name",
+									distinct=True
+								)
+								if batches_with_live:
+									additional_courses = frappe.get_all(
+										"Batch Course",
+										{"parent": ["in", batches_with_live]},
+										pluck="course",
+										distinct=True
+									)
+									courses_from_batches = list(set(courses_from_batches + additional_courses))
+						
+						# Filter to only published courses
+						if courses_from_batches:
+							published_courses = frappe.get_all(
+								"LMS Course",
+								filters={
+									"name": ["in", courses_from_batches],
+									"published": 1,
+									"upcoming": 0,
+								},
+								pluck="name"
+							)
+							if published_courses:
+								filters.update({"name": ["in", published_courses]})
+							else:
+								filters.update({"name": ["in", []]})
+						else:
+							filters.update({"name": ["in", []]})
+					else:
+						# No live classes in enrolled batches
+						filters.update({"name": ["in", []]})
+				else:
+					# No enrolled batches
+					filters.update({"name": ["in", []]})
+			else:
+				# For non-students, use default live filter behavior
+				filters.update({"featured": 0})
+				show_featured = True
+		else:
+			# Guest user
+			filters.update({"featured": 0})
+			show_featured = True
 		del filters["live"]
 
 	if filters.get("certification"):
