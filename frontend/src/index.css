@@ -1,3 +1,30 @@
 @import './assets/Inter/inter.css';
 @import 'frappe-ui/style.css';
 @import './styles/codemirror.css';
+
+/* Hide "Built on Frappe" branding */
+[class*="built-on"],
+[class*="built-on-frappe"],
+[data-built-on],
+.frappe-branding,
+[class*="frappe-branding"],
+a[href*="frappe.io"]:not([href*="docs"]):not([href*="github"]) {
+	display: none !important;
+	visibility: hidden !important;
+}
+
+/* Hide footer elements that might contain branding */
+footer a[href*="frappe"],
+footer [class*="frappe"],
+footer [class*="branding"],
+footer a[href*="frappe.io"] {
+	display: none !important;
+}
+
+/* Target common footer positioning patterns */
+.fixed.bottom-0.right-0 a[href*="frappe"],
+.absolute.bottom-0.right-0 a[href*="frappe"],
+[class*="fixed"][class*="bottom"] a[href*="frappe"],
+[class*="absolute"][class*="bottom"] a[href*="frappe"] {
+	display: none !important;
+}

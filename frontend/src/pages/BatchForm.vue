@@ -109,14 +109,28 @@
 						/>
 					</div>
 					<div class="space-y-5">
-						<FormControl
-							v-model="batch.timezone"
-							:label="__('Timezone')"
-							type="text"
-							:placeholder="__('Example: IST (+5:30)')"
-							class="mb-4"
-							:required="true"
-						/>
+						<div class="space-y-1.5">
+							<label class="block text-ink-gray-5 text-xs" for="batchTimezone">
+								{{ __('Timezone') }}
+								<span class="text-ink-red-3">*</span>
+							</label>
+							<Autocomplete
+								@update:modelValue="(opt) => {
+									if (opt) {
+										if (typeof opt === 'object' && opt.value) {
+											batch.timezone = opt.value
+										} else if (typeof opt === 'string') {
+											batch.timezone = opt
+										}
+									} else {
+										batch.timezone = ''
+									}
+								}"
+								:modelValue="batch.timezone ? getTimezoneOptions().find(tz => tz.value === batch.timezone) || { label: batch.timezone, value: batch.timezone } : null"
+								:options="getTimezoneOptions()"
+								:required="true"
+							/>
+						</div>
 						<FormControl
 							v-model="batch.evaluation_end_date"
 							:label="__('Evaluation End Date')"
@@ -331,6 +345,7 @@ import {
 	toast,
 	call,
 	Toast,
+	Autocomplete,
 } from 'frappe-ui'
 import { useRouter } from 'vue-router'
 import { Image, Trash2 } from 'lucide-vue-next'
@@ -346,6 +361,8 @@ import {
 	sanitizeHTML,
 	updateMetaInfo,
 	validateFile,
+	getTimezones,
+	getUserTimezone,
 } from '@/utils'
 
 const router = useRouter()
@@ -365,7 +382,7 @@ const props = defineProps({
 
 const batch = reactive({
 	title: '',
-	published: false,
+	published: true,
 	description: '',
 	batch_details: '',
 	start_date: '',
@@ -398,6 +415,8 @@ onMounted(() => {
 		fetchBatchInfo()
 	} else {
 		capture('batch_form_opened')
+		// Set default timezone for new batch
+		batch.timezone = getUserTimezone() || ''
 	}
 	window.addEventListener('keydown', keyboardShortcut)
 })
@@ -609,6 +628,15 @@ const saveImage = (file) => {
 
 const removeImage = () => {
 	batch.image = null
+}
+
+const getTimezoneOptions = () => {
+	return getTimezones().map((timezone) => {
+		return {
+			label: timezone,
+			value: timezone,
+		}
+	})
 }
 
 const breadcrumbs = computed(() => {

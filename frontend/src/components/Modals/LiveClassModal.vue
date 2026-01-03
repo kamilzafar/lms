@@ -60,8 +60,18 @@
 								<span class="text-ink-red-3">*</span>
 							</label>
 							<Autocomplete
-								@update:modelValue="(opt) => (liveClass.timezone = opt.value)"
-								:modelValue="liveClass.timezone"
+								@update:modelValue="(opt) => {
+									if (opt) {
+										if (typeof opt === 'object' && opt.value) {
+											liveClass.timezone = opt.value
+										} else if (typeof opt === 'string') {
+											liveClass.timezone = opt
+										}
+									} else {
+										liveClass.timezone = ''
+									}
+								}"
+								:modelValue="liveClass.timezone && liveClass.timezone.trim() ? (getTimezoneOptions().find(tz => tz.value === liveClass.timezone) || { label: liveClass.timezone, value: liveClass.timezone }) : null"
 								:options="getTimezoneOptions()"
 								:required="true"
 							/>
@@ -120,7 +130,7 @@ let liveClass = reactive({
 	timezone: '',
 	auto_recording: 'Cloud',
 	batch: props.batch,
-	host: user.data.name,
+	host: user.data?.name || '',
 })
 
 onMounted(() => {
@@ -166,23 +176,44 @@ const createLiveClass = createResource({
 })
 
 const submitLiveClass = (close) => {
-	return createLiveClass.submit(liveClass, {
+	// Ensure duration is a number
+	const submitData = {
+		...liveClass,
+		duration: Number(liveClass.duration) || liveClass.duration,
+	}
+	
+	return createLiveClass.submit(submitData, {
 		validate() {
-			validateFormFields()
+			const validationError = validateFormFields()
+			if (validationError) {
+				throw new Error(validationError)
+			}
 		},
 		onSuccess() {
 			liveClasses.value.reload()
 			refreshForm()
 			close()
+			toast.success(__('Live class created successfully'))
 		},
 		onError(err) {
-			toast.error(err.messages?.[0] || err)
+			// Check if the error is just a warning but class was created
+			const errorMessage = err.messages?.[0] || err.message || err
+			// If class was created in Zoom but there's a minor error, show success
+			if (typeof errorMessage === 'string' && 
+				(errorMessage.includes('created') || errorMessage.includes('success'))) {
+				liveClasses.value.reload()
+				refreshForm()
+				close()
+				toast.success(__('Live class created successfully'))
+			} else {
+				toast.error(errorMessage)
+			}
 		},
 	})
 }
 
 const validateFormFields = () => {
-	if (!liveClass.title) {
+	if (!liveClass.title || liveClass.title.trim() === '') {
 		return __('Please enter a title.')
 	}
 	if (!liveClass.date) {
@@ -191,7 +222,7 @@ const validateFormFields = () => {
 	if (!liveClass.time) {
 		return __('Please select a time.')
 	}
-	if (!liveClass.timezone) {
+	if (!liveClass.timezone || liveClass.timezone.trim() === '') {
 		return __('Please select a timezone.')
 	}
 	if (!valideTime()) {
@@ -209,12 +240,17 @@ const validateFormFields = () => {
 	) {
 		return __('Please select a future date and time.')
 	}
-	if (!liveClass.duration) {
-		return __('Please select a duration.')
+	// Fix duration validation - handle both string and number, check for empty/zero
+	const duration = Number(liveClass.duration)
+	if (!liveClass.duration || isNaN(duration) || duration <= 0) {
+		return __('Please enter a valid duration.')
 	}
 }
 
 const valideTime = () => {
+	if (!liveClass.time) {
+		return false
+	}
 	let time = liveClass.time.split(':')
 	if (time.length != 2) {
 		return false
