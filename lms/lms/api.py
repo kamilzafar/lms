@@ -2585,6 +2585,7 @@ def get_upcoming_batches():
 def zoom_webhook():
 	"""
 	Handle Zoom webhook events for recording notifications.
+	Can be called directly by Zoom or via n8n proxy.
 
 	Supported events:
 	- recording.completed: When a cloud recording is ready
@@ -2604,6 +2605,11 @@ def zoom_webhook():
 			frappe.logger().error("[Zoom Webhook] No request data received")
 			return {"status": "error", "message": "No data received"}
 
+		# Handle n8n wrapped payload - n8n might send {body: {...actual zoom payload...}}
+		if "body" in payload and "event" not in payload:
+			frappe.logger().info("[Zoom Webhook] Detected n8n wrapped payload, extracting body")
+			payload = payload.get("body", payload)
+
 		event_type = payload.get("event", "")
 
 		frappe.logger().info(f"[Zoom Webhook] Received event: {event_type}")
@@ -2613,11 +2619,11 @@ def zoom_webhook():
 		if event_type == "endpoint.url_validation":
 			return _handle_zoom_url_validation(payload)
 
-		# Get webhook signature from headers for verification
+		# Get webhook signature from headers for verification (only if direct from Zoom)
 		signature = frappe.request.headers.get("x-zm-signature", "")
 		timestamp = frappe.request.headers.get("x-zm-request-timestamp", "")
 
-		# Verify webhook signature if secret is configured
+		# Verify webhook signature if secret is configured (skip if from n8n)
 		if signature and timestamp:
 			is_valid = _verify_zoom_webhook_signature(
 				frappe.request.data.decode("utf-8"),
@@ -2639,6 +2645,72 @@ def zoom_webhook():
 	except Exception as e:
 		frappe.logger().error(f"[Zoom Webhook] Error processing webhook: {str(e)}")
 		frappe.log_error(title="Zoom Webhook Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def zoom_webhook_n8n():
+	"""
+	Dedicated endpoint for n8n to forward Zoom webhooks.
+	This endpoint is simpler and doesn't require signature verification.
+
+	n8n should forward the complete Zoom payload to this endpoint.
+
+	Webhook URL: /api/method/lms.lms.api.zoom_webhook_n8n
+	"""
+	try:
+		# Get request data
+		payload = None
+
+		if frappe.request.data:
+			payload = json.loads(frappe.request.data)
+
+		# Also check form data (in case n8n sends differently)
+		if not payload and frappe.form_dict:
+			payload = dict(frappe.form_dict)
+
+		if not payload:
+			frappe.logger().error("[Zoom Webhook n8n] No request data received")
+			return {"status": "error", "message": "No data received"}
+
+		frappe.logger().info(f"[Zoom Webhook n8n] Received payload keys: {list(payload.keys())}")
+
+		# Handle various n8n payload formats
+		# n8n might wrap in: {body: {...}}, {data: {...}}, or send directly
+		actual_payload = payload
+		if "body" in payload and isinstance(payload.get("body"), dict):
+			actual_payload = payload["body"]
+			frappe.logger().info("[Zoom Webhook n8n] Extracted from 'body' wrapper")
+		elif "data" in payload and isinstance(payload.get("data"), dict):
+			actual_payload = payload["data"]
+			frappe.logger().info("[Zoom Webhook n8n] Extracted from 'data' wrapper")
+
+		event_type = actual_payload.get("event", "")
+
+		frappe.logger().info(f"[Zoom Webhook n8n] Event type: {event_type}")
+		frappe.logger().info(f"[Zoom Webhook n8n] Payload: {json.dumps(actual_payload, indent=2)}")
+
+		# Handle URL validation
+		if event_type == "endpoint.url_validation":
+			return _handle_zoom_url_validation(actual_payload)
+
+		# Handle recording events
+		if event_type in ["recording.completed", "recording.transcript_completed"]:
+			result = _handle_recording_event(actual_payload)
+			frappe.logger().info(f"[Zoom Webhook n8n] Recording event result: {result}")
+			return result
+
+		# Handle other events
+		frappe.logger().info(f"[Zoom Webhook n8n] Unhandled event type: {event_type}")
+		return {"status": "success", "message": f"Event {event_type} acknowledged"}
+
+	except json.JSONDecodeError as e:
+		frappe.logger().error(f"[Zoom Webhook n8n] JSON decode error: {str(e)}")
+		frappe.logger().error(f"[Zoom Webhook n8n] Raw data: {frappe.request.data}")
+		return {"status": "error", "message": f"Invalid JSON: {str(e)}"}
+	except Exception as e:
+		frappe.logger().error(f"[Zoom Webhook n8n] Error: {str(e)}")
+		frappe.log_error(title="Zoom Webhook n8n Error", message=frappe.get_traceback())
 		return {"status": "error", "message": str(e)}
 
 
