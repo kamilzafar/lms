@@ -85,42 +85,48 @@ const loadRecording = async () => {
 			live_class: props.liveClassId
 		})
 
+		console.log('[ZoomRecordingEmbed] API response:', data)
+
 		if (data.token && data.recording_available) {
 			// Token identifies this viewing session
 			recordingToken.value = data.token
 			recordingTitle.value = data.title || null
 			processing.value = false
-		} else if (data.status === "processing" || (!data.recording_available)) {
-			// Recording is still being processed
+		} else if (data.status === "processing" || data.status === "error" || (!data.recording_available && !data.token)) {
+			// Recording is still being processed or has an error
 			processing.value = true
-			processingMessage.value = data.message || null
+			processingMessage.value = data.message || __('Recording is being processed. Please check back in a few minutes.')
 
-			// Auto-retry after 2 minutes
-			retryTimeout = setTimeout(() => {
-				if (processing.value) {
-					loadRecording()
-				}
-			}, 120000) // 2 minutes
+			// Auto-retry after 2 minutes (only if processing, not if error)
+			if (data.status !== "error") {
+				retryTimeout = setTimeout(() => {
+					if (processing.value) {
+						loadRecording()
+					}
+				}, 120000) // 2 minutes
+			}
 		} else {
-			error.value = __('Recording not found')
+			error.value = data.message || __('Recording not found')
 		}
 	} catch (err) {
 		console.error('Error loading recording:', err)
 
-		// Check if error indicates processing
+		// Check if error indicates processing (only retry for processing, not actual errors)
 		const errorMessage = err.messages?.[0] || err.message || ''
 		if (errorMessage.includes('processed') || errorMessage.includes('processing')) {
 			processing.value = true
 			processingMessage.value = errorMessage
 
-			// Auto-retry after 2 minutes
+			// Auto-retry after 2 minutes (only for processing status)
 			retryTimeout = setTimeout(() => {
 				if (processing.value) {
 					loadRecording()
 				}
 			}, 120000) // 2 minutes
 		} else {
+			// Actual error - don't auto-retry
 			error.value = errorMessage || __('Failed to load recording')
+			processing.value = false
 		}
 	} finally {
 		loading.value = false

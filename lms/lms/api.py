@@ -2045,6 +2045,8 @@ def get_recorded_lectures(course_name=None):
 		pluck="course"
 	)
 	
+	frappe.logger().info(f"[Recorded Lectures] User {frappe.session.user}: enrolled_batches={len(enrolled_batches)}, enrolled_courses={len(enrolled_courses)}")
+	
 	# Get courses from batches
 	if enrolled_batches:
 		batch_courses = frappe.get_all(
@@ -2071,9 +2073,11 @@ def get_recorded_lectures(course_name=None):
 			distinct=True
 		)
 		enrolled_batches = batches_with_courses
+		frappe.logger().info(f"[Recorded Lectures] Found {len(enrolled_batches)} batches from enrolled courses")
 	
 	# If still no batches, return empty
 	if not enrolled_batches:
+		frappe.logger().info(f"[Recorded Lectures] No enrolled batches found for user {frappe.session.user}")
 		return []
 	
 	# Get live classes with recordings from enrolled batches
@@ -2098,6 +2102,8 @@ def get_recorded_lectures(course_name=None):
 		],
 		order_by="date desc"
 	)
+	
+	frappe.logger().info(f"[Recorded Lectures] Found {len(live_classes)} live classes with auto_recording enabled")
 	
 	# Get course info for each batch and filter by enrollment
 	result = []
@@ -2143,6 +2149,7 @@ def get_recorded_lectures(course_name=None):
 			
 			result.append(live_class)
 	
+	frappe.logger().info(f"[Recorded Lectures] Returning {len(result)} recorded lectures for user {frappe.session.user}")
 	return result
 
 
@@ -2156,7 +2163,11 @@ def get_recording_embed_url(live_class):
 	if frappe.session.user == "Guest":
 		frappe.throw(_("Please login to view recordings"))
 
-	live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+	try:
+		live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+	except frappe.DoesNotExistError:
+		frappe.logger().error(f"[Recording Embed] Live class not found: {live_class}")
+		frappe.throw(_("Live class not found"))
 
 	# Verify user has access (enrolled in batch)
 	enrolled_batches = frappe.get_all(
@@ -2179,15 +2190,30 @@ def get_recording_embed_url(live_class):
 		)
 
 		if not any(course in enrolled_courses for course in batch_courses):
+			frappe.logger().warning(f"[Recording Embed] Access denied for user {frappe.session.user} to live class {live_class}")
 			frappe.throw(_("You don't have access to this recording"))
 
+	# Log current recording status
+	frappe.logger().info(f"[Recording Embed] Live class {live_class}: recording_available={live_class_doc.recording_available}, recording_url={bool(live_class_doc.recording_url)}, meeting_id={live_class_doc.meeting_id}")
+
 	if not live_class_doc.recording_available or not live_class_doc.recording_url:
+		frappe.logger().info(f"[Recording Embed] Recording not available, attempting to fetch for {live_class}")
 		# Try to fetch recording
 		from lms.lms.doctype.lms_live_class.lms_live_class import fetch_recording
-		recording_data = fetch_recording(live_class)
+		try:
+			recording_data = fetch_recording(live_class)
+			frappe.logger().info(f"[Recording Embed] Fetch result: recording_available={recording_data.get('recording_available')}, status={recording_data.get('status')}")
+		except Exception as e:
+			frappe.logger().error(f"[Recording Embed] Error fetching recording: {str(e)}")
+			recording_data = {
+				"recording_available": False,
+				"status": "error",
+				"message": _("Error fetching recording. Please try again later.")
+			}
 
 		if not recording_data.get("recording_available"):
 			# Return processing status instead of throwing error
+			frappe.logger().info(f"[Recording Embed] Returning processing status for {live_class}")
 			return {
 				"embed_url": None,
 				"recording_available": False,
