@@ -1819,7 +1819,8 @@ def get_my_live_classes():
 	if frappe.session.user == "Guest":
 		return my_live_classes
 
-	batches = frappe.get_all(
+	# Get batches where user is enrolled as a student
+	enrolled_batches = frappe.get_all(
 		"LMS Batch Enrollment",
 		{
 			"member": frappe.session.user,
@@ -1828,11 +1829,26 @@ def get_my_live_classes():
 		pluck="batch",
 	)
 
+	# Get batches where user is a course instructor (for teachers)
+	instructor_batches = frappe.get_all(
+		"Course Instructor",
+		{
+			"instructor": frappe.session.user,
+		},
+		pluck="parent",
+	)
+
+	# Combine both lists and remove duplicates
+	all_batches = list(set(enrolled_batches + instructor_batches))
+
+	if not all_batches:
+		return my_live_classes
+
 	live_class_details = frappe.get_all(
 		"LMS Live Class",
 		filters={
 			"date": [">=", getdate()],
-			"batch_name": ["in", batches],
+			"batch_name": ["in", all_batches],
 		},
 		fields=[
 			"name",
