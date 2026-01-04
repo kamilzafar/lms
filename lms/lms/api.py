@@ -2307,25 +2307,28 @@ def get_recording_secure(token, live_class):
 		frappe.throw(_("Recording URL not found"))
 
 	# Handle password in URL if needed
+	# Note: Password should already be embedded at webhook stage, but add as fallback
 	embed_url = recording_url
-	if password and "pwd=" not in recording_url and "password=" not in recording_url:
-		if "/rec/share/" not in recording_url:
-			try:
-				from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
-				parsed = urlparse(recording_url)
-				query_params = parse_qs(parsed.query)
-				query_params['pwd'] = [password]
-				new_query = urlencode(query_params, doseq=True)
-				embed_url = urlunparse((
-					parsed.scheme,
-					parsed.netloc,
-					parsed.path,
-					parsed.params,
-					new_query,
-					parsed.fragment
-				))
-			except Exception:
-				embed_url = recording_url
+	frappe.logger().info(f"[Recording Secure] Processing URL - has_password={bool(password)}, pwd_in_url={'pwd=' in recording_url}, access_token_in_url={'access_token=' in recording_url}")
+
+	# Only add password if:
+	# 1. We have a password
+	# 2. It's not already in the URL (from webhook)
+	# 3. There's no access_token (which bypasses password)
+	if password and "pwd=" not in recording_url and "password=" not in recording_url and "access_token=" not in recording_url:
+		try:
+			from urllib.parse import quote
+			# Add password to URL as fallback (should already be embedded from webhook)
+			separator = "&" if "?" in recording_url else "?"
+			embed_url = f"{recording_url}{separator}pwd={quote(password, safe='')}"
+			frappe.logger().info(f"[Recording Secure] Added password to URL (fallback from webhook)")
+		except Exception as e:
+			frappe.logger().error(f"[Recording Secure] Error adding password to URL: {str(e)}")
+			embed_url = recording_url
+	elif "pwd=" in recording_url or "access_token=" in recording_url:
+		frappe.logger().info(f"[Recording Secure] Password/token already embedded in URL from webhook")
+	else:
+		frappe.logger().warning(f"[Recording Secure] No password found in recording_password field for {live_class}")
 
 	# Return HTML with embedded iframe (URL stays on backend)
 	html_content = f'''
@@ -2870,6 +2873,19 @@ def _handle_recording_event(payload):
 		if not recording_url:
 			frappe.logger().warning(f"[Zoom Webhook] No suitable recording URL found")
 			return {"status": "success", "message": "No recording URL in payload"}
+
+		# Embed password into URL if available to prevent Zoom from asking for passcode
+		if password and "pwd=" not in recording_url and "access_token=" not in recording_url:
+			try:
+				from urllib.parse import quote
+				# Add password to URL
+				separator = "&" if "?" in recording_url else "?"
+				recording_url_with_pwd = f"{recording_url}{separator}pwd={quote(password, safe='')}"
+				frappe.logger().info(f"[Zoom Webhook] Embedded password into recording URL")
+				recording_url = recording_url_with_pwd
+			except Exception as e:
+				frappe.logger().error(f"[Zoom Webhook] Error embedding password: {str(e)}")
+				# Continue with original URL if embedding fails
 
 		# Update live class with recording info
 		live_class.recording_url = recording_url

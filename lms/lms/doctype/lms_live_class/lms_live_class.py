@@ -385,6 +385,27 @@ def fetch_recording(live_class_name):
 
 				password = cloud_recording.get("password", "")
 
+				# Check if access_token is available (Zoom sometimes provides this for password-protected recordings)
+				access_token = cloud_recording.get("access_token", "")
+				if access_token:
+					frappe.logger().info(f"[Recording Fetch] Access token available for recording")
+					# Append access_token to URL to bypass password prompt
+					if "?" in playback_url:
+						playback_url = f"{playback_url}&access_token={access_token}"
+					else:
+						playback_url = f"{playback_url}?access_token={access_token}"
+					frappe.logger().info(f"[Recording Fetch] Added access_token to recording URL")
+				elif password and "pwd=" not in playback_url:
+					# If no access_token, embed password into URL to prevent Zoom from asking for passcode
+					try:
+						from urllib.parse import quote
+						separator = "&" if "?" in playback_url else "?"
+						playback_url = f"{playback_url}{separator}pwd={quote(password, safe='')}"
+						frappe.logger().info(f"[Recording Fetch] Embedded password into recording URL")
+					except Exception as e:
+						frappe.logger().error(f"[Recording Fetch] Error embedding password: {str(e)}")
+						# Continue with original URL if embedding fails
+
 				if playback_url:
 					# Store the meeting UUID for potential future use
 					meeting_uuid = cloud_recording.get("meeting_id", "")
