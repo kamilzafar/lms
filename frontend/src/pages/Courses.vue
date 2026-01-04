@@ -204,7 +204,7 @@
 		v-model="showRecordingModal"
 		:options="{
 			title: currentRecording?.title || __('Recorded Lecture'),
-			size: 'xl',
+			size: '2xl',
 		}"
 	>
 		<template #body-content>
@@ -212,7 +212,9 @@
 				<div v-if="currentRecording.description" class="mb-4 text-ink-gray-7">
 					{{ currentRecording.description }}
 				</div>
-				<ZoomRecordingEmbed :liveClassId="currentRecording.name" />
+				<div style="min-height: 600px; width: 100%;">
+					<ZoomRecordingEmbed :liveClassId="currentRecording.name" />
+				</div>
 			</div>
 		</template>
 	</Dialog>

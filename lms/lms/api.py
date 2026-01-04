@@ -1034,20 +1034,16 @@ def add_lesson(title, chapter, course, idx):
 			"course": course,
 		}
 	)
-	lesson.insert()
+	lesson.insert(ignore_permissions=True)
 
-	lesson_reference = frappe.new_doc("Lesson Reference")
-	lesson_reference.update(
-		{
-			"lesson": lesson.name,
-			"idx": idx,
-			"parent": chapter,
-			"parenttype": "Course Chapter",
-			"parentfield": "lessons",
-		}
-	)
-	lesson_reference.insert()
-	
+	# Get the course chapter and add lesson reference as child table
+	chapter_doc = frappe.get_doc("Course Chapter", chapter)
+	lesson_reference = chapter_doc.append("lessons", {
+		"lesson": lesson.name,
+		"idx": idx,
+	})
+	chapter_doc.save(ignore_permissions=True)
+
 	return lesson
 
 
@@ -1106,24 +1102,14 @@ def create_lesson_from_recording(live_class_name):
 					chapter.course = course_name
 					chapter.insert(ignore_permissions=True)
 					chapter_name = chapter.name
-					
-					# Add chapter to course
-					chapter_ref = frappe.new_doc("Chapter Reference")
-					chapter_ref.chapter = chapter_name
-					chapter_ref.parent = course_name
-					chapter_ref.parenttype = "LMS Course"
-					chapter_ref.parentfield = "chapters"
-					
-					# Get max idx for chapters
-					max_idx = frappe.db.get_value(
-						"Chapter Reference",
-						{"parent": course_name},
-						"max(idx)",
-						as_dict=False
-					) or 0
-					chapter_ref.idx = max_idx + 1
-					chapter_ref.insert(ignore_permissions=True)
-					
+
+					# Add chapter to course via LMS Course
+					course_doc = frappe.get_doc("LMS Course", course_name)
+					course_doc.append("chapters", {
+						"chapter": chapter_name,
+					})
+					course_doc.save(ignore_permissions=True)
+
 					frappe.logger().info(f"[Recording Lesson] Created Recordings chapter for course {course_name}")
 				else:
 					frappe.logger().info(f"[Recording Lesson] Reusing existing Recordings chapter {chapter_name} for course {course_name}")
@@ -1859,6 +1845,7 @@ def get_my_live_classes():
 			"start_url",
 			"join_url",
 			"owner",
+			"batch_name",
 		],
 		limit=2,
 		order_by="date",
@@ -1866,8 +1853,6 @@ def get_my_live_classes():
 
 	if len(live_class_details):
 		for live_class in live_class_details:
-			live_class.course_title = frappe.db.get_value("LMS Course", live_class.course, "title")
-
 			my_live_classes.append(live_class)
 
 	return my_live_classes
@@ -2285,27 +2270,32 @@ def get_recording_secure(token, live_class):
 
 	live_class_doc = frappe.get_doc("LMS Live Class", live_class)
 
-	# Re-verify access (enrollment could have changed)
-	enrolled_batches = frappe.get_all(
-		"LMS Batch Enrollment",
-		{"member": frappe.session.user},
-		pluck="batch"
-	)
+	# Check if user is admin/moderator (skip enrollment check)
+	user_roles = frappe.get_roles(frappe.session.user)
+	is_privileged = any(role in user_roles for role in ["System Manager", "LMS Admin", "Moderator", "Course Creator"])
 
-	if live_class_doc.batch_name not in enrolled_batches:
-		batch_courses = frappe.get_all(
-			"Batch Course",
-			{"parent": live_class_doc.batch_name},
-			pluck="course"
-		)
-		enrolled_courses = frappe.get_all(
-			"LMS Enrollment",
+	if not is_privileged:
+		# Re-verify access (enrollment could have changed)
+		enrolled_batches = frappe.get_all(
+			"LMS Batch Enrollment",
 			{"member": frappe.session.user},
-			pluck="course"
+			pluck="batch"
 		)
 
-		if not any(course in enrolled_courses for course in batch_courses):
-			frappe.throw(_("You don't have access to this recording"))
+		if live_class_doc.batch_name not in enrolled_batches:
+			batch_courses = frappe.get_all(
+				"Batch Course",
+				{"parent": live_class_doc.batch_name},
+				pluck="course"
+			)
+			enrolled_courses = frappe.get_all(
+				"LMS Enrollment",
+				{"member": frappe.session.user},
+				pluck="course"
+			)
+
+			if not any(course in enrolled_courses for course in batch_courses):
+				frappe.throw(_("You don't have access to this recording"))
 
 	# Log access
 	_log_recording_access(live_class_doc.name, "view", frappe.session.user)
