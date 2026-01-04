@@ -2170,29 +2170,38 @@ def get_recording_embed_url(live_class):
 		frappe.logger().error(f"[Recording Embed] Live class not found: {live_class}")
 		frappe.throw(_("Live class not found"))
 
-	# Verify user has access (enrolled in batch)
-	enrolled_batches = frappe.get_all(
-		"LMS Batch Enrollment",
-		{"member": frappe.session.user},
-		pluck="batch"
-	)
+	# Check if user is admin/moderator (skip enrollment check)
+	user_roles = frappe.get_roles(frappe.session.user)
+	is_privileged = any(role in user_roles for role in ["System Manager", "LMS Admin", "Moderator", "Course Creator"])
 
-	if live_class_doc.batch_name not in enrolled_batches:
-		# Also check if user is enrolled in course directly
-		batch_courses = frappe.get_all(
-			"Batch Course",
-			{"parent": live_class_doc.batch_name},
-			pluck="course"
-		)
-		enrolled_courses = frappe.get_all(
-			"LMS Enrollment",
+	if not is_privileged:
+		# Verify user has access (enrolled in batch)
+		enrolled_batches = frappe.get_all(
+			"LMS Batch Enrollment",
 			{"member": frappe.session.user},
-			pluck="course"
+			pluck="batch"
 		)
 
-		if not any(course in enrolled_courses for course in batch_courses):
-			frappe.logger().warning(f"[Recording Embed] Access denied for user {frappe.session.user} to live class {live_class}")
-			frappe.throw(_("You don't have access to this recording"))
+		has_batch_access = live_class_doc.batch_name and live_class_doc.batch_name in enrolled_batches
+
+		if not has_batch_access:
+			# Also check if user is enrolled in course directly
+			batch_courses = []
+			if live_class_doc.batch_name:
+				batch_courses = frappe.get_all(
+					"Batch Course",
+					{"parent": live_class_doc.batch_name},
+					pluck="course"
+				)
+			enrolled_courses = frappe.get_all(
+				"LMS Enrollment",
+				{"member": frappe.session.user},
+				pluck="course"
+			)
+
+			if not batch_courses or not any(course in enrolled_courses for course in batch_courses):
+				frappe.logger().warning(f"[Recording Embed] Access denied for user {frappe.session.user} to live class {live_class}")
+				frappe.throw(_("You don't have access to this recording"))
 
 	# Log current recording status
 	frappe.logger().info(f"[Recording Embed] Live class {live_class}: recording_available={live_class_doc.recording_available}, recording_url={bool(live_class_doc.recording_url)}, meeting_id={live_class_doc.meeting_id}")
@@ -2203,23 +2212,28 @@ def get_recording_embed_url(live_class):
 		from lms.lms.doctype.lms_live_class.lms_live_class import fetch_recording
 		try:
 			recording_data = fetch_recording(live_class)
-			frappe.logger().info(f"[Recording Embed] Fetch result: recording_available={recording_data.get('recording_available')}, status={recording_data.get('status')}")
+			if recording_data:
+				frappe.logger().info(f"[Recording Embed] Fetch result: recording_available={recording_data.get('recording_available')}, status={recording_data.get('status')}")
+			else:
+				frappe.logger().warning(f"[Recording Embed] fetch_recording returned None for {live_class}")
+				recording_data = {}
 		except Exception as e:
 			frappe.logger().error(f"[Recording Embed] Error fetching recording: {str(e)}")
+			frappe.log_error(title="Recording Embed Fetch Error", message=frappe.get_traceback())
 			recording_data = {
 				"recording_available": False,
 				"status": "error",
 				"message": _("Error fetching recording. Please try again later.")
 			}
 
-		if not recording_data.get("recording_available"):
+		if not recording_data or not recording_data.get("recording_available"):
 			# Return processing status instead of throwing error
 			frappe.logger().info(f"[Recording Embed] Returning processing status for {live_class}")
 			return {
 				"embed_url": None,
 				"recording_available": False,
-				"status": recording_data.get("status", "processing"),
-				"message": recording_data.get("message", _("Recording is being processed. Please check back in a few minutes.")),
+				"status": recording_data.get("status", "processing") if recording_data else "processing",
+				"message": recording_data.get("message", _("Recording is being processed. Please check back in a few minutes.")) if recording_data else _("Recording is being processed. Please check back in a few minutes."),
 				"title": live_class_doc.title,
 				"description": live_class_doc.description
 			}
