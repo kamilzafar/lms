@@ -165,29 +165,38 @@ def get_lesson_details(chapter, progress=False):
 
 def get_lesson_icon(body, content):
 	if content:
-		content = json.loads(content)
+		# Check if this is a recording lesson (content starts with live_class:)
+		if isinstance(content, str) and content.startswith("live_class:"):
+			return "icon-youtube"
 
-		for block in content.get("blocks"):
-			if block.get("type") == "upload" and block.get("data").get("file_type").lower() in [
-				"mp4",
-				"webm",
-				"ogg",
-				"mov",
-			]:
-				return "icon-youtube"
+		# Try to parse as JSON for other content types
+		try:
+			content_data = json.loads(content)
 
-			if block.get("type") == "embed" and block.get("data").get("service") in [
-				"youtube",
-				"vimeo",
-				"cloudflareStream",
-				"bunnyStream",
-			]:
-				return "icon-youtube"
+			for block in content_data.get("blocks", []):
+				if block.get("type") == "upload" and block.get("data", {}).get("file_type", "").lower() in [
+					"mp4",
+					"webm",
+					"ogg",
+					"mov",
+				]:
+					return "icon-youtube"
 
-			if block.get("type") == "quiz":
-				return "icon-quiz"
+				if block.get("type") == "embed" and block.get("data", {}).get("service") in [
+					"youtube",
+					"vimeo",
+					"cloudflareStream",
+					"bunnyStream",
+				]:
+					return "icon-youtube"
 
-		return "icon-list"
+				if block.get("type") == "quiz":
+					return "icon-quiz"
+
+			return "icon-list"
+		except (json.JSONDecodeError, TypeError):
+			# If content is not valid JSON, fall through to check body
+			pass
 
 	macros = find_macros(body)
 	for macro in macros:
