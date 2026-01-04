@@ -2249,7 +2249,7 @@ def get_recording_embed_url(live_class):
 
 	# Store token in cache (no expiration - URL is never exposed, so token reuse is safe)
 	cache_key = f"recording_token_{live_class_doc.name}_{frappe.session.user}_{token}"
-	frappe.cache().set(
+	frappe.cache().set_value(
 		cache_key,
 		{
 			"live_class": live_class_doc.name,
