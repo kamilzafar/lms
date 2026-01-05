@@ -29,20 +29,28 @@ class CourseLesson(Document):
 			self.save_lesson_details_in_quiz(self.instructor_content)
 
 	def save_lesson_details_in_quiz(self, content):
-		content = json.loads(self.content)
-		for block in content.get("blocks"):
-			if block.get("type") == "quiz":
-				quiz = block.get("data").get("quiz")
-				if not frappe.db.exists("LMS Quiz", quiz):
-					frappe.throw(_("Invalid Quiz ID in content"))
-				frappe.db.set_value(
-					"LMS Quiz",
-					quiz,
-					{
-						"course": self.course,
-						"lesson": self.name,
-					},
-				)
+		# Skip processing for recording lessons (content starts with "live_class:")
+		if self.content and self.content.startswith("live_class:"):
+			return
+
+		try:
+			content = json.loads(self.content)
+			for block in content.get("blocks"):
+				if block.get("type") == "quiz":
+					quiz = block.get("data").get("quiz")
+					if not frappe.db.exists("LMS Quiz", quiz):
+						frappe.throw(_("Invalid Quiz ID in content"))
+					frappe.db.set_value(
+						"LMS Quiz",
+						quiz,
+						{
+							"course": self.course,
+							"lesson": self.name,
+						},
+					)
+		except (json.JSONDecodeError, TypeError, AttributeError) as e:
+			# Content is not valid JSON, skip
+			frappe.logger().warning(f"[Course Lesson] Could not parse content for {self.name}: {str(e)}")
 
 
 @frappe.whitelist()
@@ -131,16 +139,25 @@ def get_quiz_progress(lesson):
 	quizzes = []
 
 	if lesson_details.content:
-		content = json.loads(lesson_details.content)
+		# Skip JSON parsing for recording lessons (content starts with "live_class:")
+		if lesson_details.content.startswith("live_class:"):
+			# Recording lessons don't have quizzes in their content
+			return quizzes
 
-		for block in content.get("blocks"):
-			if block.get("type") == "quiz":
-				quizzes.append(block.get("data").get("quiz"))
-			if block.get("type") == "upload":
-				quizzes_in_video = block.get("data").get("quizzes")
-				if quizzes_in_video and len(quizzes_in_video) > 0:
-					for row in quizzes_in_video:
-						quizzes.append(row.get("quiz"))
+		try:
+			content = json.loads(lesson_details.content)
+
+			for block in content.get("blocks", []):
+				if block.get("type") == "quiz":
+					quizzes.append(block.get("data").get("quiz"))
+				if block.get("type") == "upload":
+					quizzes_in_video = block.get("data").get("quizzes")
+					if quizzes_in_video and len(quizzes_in_video) > 0:
+						for row in quizzes_in_video:
+							quizzes.append(row.get("quiz"))
+		except (json.JSONDecodeError, TypeError, AttributeError) as e:
+			# Content is not valid JSON, skip
+			frappe.logger().warning(f"[Course Lesson] Could not parse content for {lesson}: {str(e)}")
 
 	elif lesson_details.body:
 		macros = find_macros(lesson_details.body)
@@ -165,11 +182,20 @@ def get_assignment_progress(lesson):
 	assignments = []
 
 	if lesson_details.content:
-		content = json.loads(lesson_details.content)
+		# Skip JSON parsing for recording lessons (content starts with "live_class:")
+		if lesson_details.content.startswith("live_class:"):
+			# Recording lessons don't have assignments in their content
+			return assignments
 
-		for block in content.get("blocks"):
-			if block.get("type") == "assignment":
-				assignments.append(block.get("data").get("assignment"))
+		try:
+			content = json.loads(lesson_details.content)
+
+			for block in content.get("blocks"):
+				if block.get("type") == "assignment":
+					assignments.append(block.get("data").get("assignment"))
+		except (json.JSONDecodeError, TypeError, AttributeError) as e:
+			# Content is not valid JSON, skip
+			frappe.logger().warning(f"[Course Lesson] Could not parse content for {lesson}: {str(e)}")
 
 	elif lesson_details.body:
 		macros = find_macros(lesson_details.body)

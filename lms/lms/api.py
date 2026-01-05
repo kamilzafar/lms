@@ -2252,7 +2252,9 @@ def get_recording_embed_url(live_class):
 	recording_duration_minutes = live_class_doc.duration or 120
 	ttl_seconds = (recording_duration_minutes * 60) + 1800  # Add 30 min buffer
 
-	current_time = now()
+	# Use get_datetime() to get actual datetime object (not string)
+	from frappe.utils import get_datetime
+	current_time = get_datetime()
 	expires_at = current_time + timedelta(seconds=ttl_seconds)
 
 	# Store token in cache with expiration
