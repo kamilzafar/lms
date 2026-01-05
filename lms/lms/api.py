@@ -2176,33 +2176,72 @@ def get_recording_embed_url(live_class):
 	is_privileged = any(role in user_roles for role in ["System Manager", "LMS Admin", "Moderator", "Course Creator"])
 
 	if not is_privileged:
-		# Verify user has access (enrolled in batch)
-		enrolled_batches = frappe.get_all(
-			"LMS Batch Enrollment",
-			{"member": frappe.session.user},
-			pluck="batch"
-		)
+		# Verify user has access - check through batch or direct course enrollment
+		has_access = False
+		access_reason = ""
 
-		has_batch_access = live_class_doc.batch_name and live_class_doc.batch_name in enrolled_batches
+		# Check 1: Is user enrolled in the batch?
+		if live_class_doc.batch_name:
+			enrolled_batches = frappe.get_all(
+				"LMS Batch Enrollment",
+				{"member": frappe.session.user},
+				pluck="batch"
+			)
+			if live_class_doc.batch_name in enrolled_batches:
+				has_access = True
+				access_reason = f"batch enrollment in {live_class_doc.batch_name}"
 
-		if not has_batch_access:
-			# Also check if user is enrolled in course directly
-			batch_courses = []
-			if live_class_doc.batch_name:
+		# Check 2: Is user enrolled in any course linked to this batch?
+		if not has_access and live_class_doc.batch_name:
+			try:
 				batch_courses = frappe.get_all(
 					"Batch Course",
 					{"parent": live_class_doc.batch_name},
 					pluck="course"
 				)
-			enrolled_courses = frappe.get_all(
-				"LMS Enrollment",
-				{"member": frappe.session.user},
-				pluck="course"
-			)
+				if batch_courses:
+					enrolled_courses = frappe.get_all(
+						"LMS Enrollment",
+						{"member": frappe.session.user},
+						pluck="course"
+					)
+					for course in batch_courses:
+						if course in enrolled_courses:
+							has_access = True
+							access_reason = f"course enrollment in {course}"
+							break
+			except Exception as e:
+				frappe.logger().warning(f"[Recording Embed] Error checking batch courses: {str(e)}")
 
-			if not batch_courses or not any(course in enrolled_courses for course in batch_courses):
-				frappe.logger().warning(f"[Recording Embed] Access denied for user {frappe.session.user} to live class {live_class}")
-				frappe.throw(_("You don't have access to this recording"))
+		# Check 3: Is user a teacher/instructor of the batch or course?
+		if not has_access:
+			try:
+				# Check if user is instructor of any course linked to this batch
+				if live_class_doc.batch_name:
+					batch_courses = frappe.get_all(
+						"Batch Course",
+						{"parent": live_class_doc.batch_name},
+						pluck="course"
+					)
+					if batch_courses:
+						instructor_courses = frappe.get_all(
+							"Course Instructor",
+							{"instructor": frappe.session.user},
+							pluck="parent"
+						)
+						for course in batch_courses:
+							if course in instructor_courses:
+								has_access = True
+								access_reason = f"instructor of {course}"
+								break
+			except Exception as e:
+				frappe.logger().warning(f"[Recording Embed] Error checking instructor status: {str(e)}")
+
+		if not has_access:
+			frappe.logger().warning(f"[Recording Embed] Access denied for user {frappe.session.user} to live class {live_class} - no batch/course enrollment")
+			frappe.throw(_("You don't have access to this recording"))
+		else:
+			frappe.logger().info(f"[Recording Embed] Access granted for user {frappe.session.user} via {access_reason}")
 
 	# Log current recording status
 	frappe.logger().info(f"[Recording Embed] Live class {live_class}: recording_available={live_class_doc.recording_available}, recording_url={bool(live_class_doc.recording_url)}, meeting_id={live_class_doc.meeting_id}")
