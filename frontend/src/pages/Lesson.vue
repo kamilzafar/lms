@@ -451,6 +451,16 @@ const attachFullscreenEvent = () => {
 	}
 }
 
+// Helper function to check if a string is valid JSON
+const isValidJSON = (str) => {
+	try {
+		JSON.parse(str)
+		return true
+	} catch (e) {
+		return false
+	}
+}
+
 onBeforeUnmount(() => {
 	document.removeEventListener('fullscreenchange', attachFullscreenEvent)
 	sidebarStore.isSidebarCollapsed = false
@@ -487,18 +497,27 @@ const setupLesson = (data) => {
 		})
 	}
 	lessonProgress.value = data.membership?.progress
-	if (data.content) editor.value = renderEditor('editor', data.content)
+	// Skip editor initialization for recording lessons (content starts with "live_class:")
+	if (data.content && !data.content.startsWith('live_class:')) {
+		editor.value = renderEditor('editor', data.content)
+	}
 	if (
 		data.instructor_content &&
+		isValidJSON(data.instructor_content) &&
 		JSON.parse(data.instructor_content)?.blocks?.length > 1
 	)
 		instructorEditor.value = renderEditor(
 			'instructor-content',
 			data.instructor_content
 		)
-	editor.value?.isReady.then(() => {
+	if (editor.value) {
+		editor.value.isReady.then(() => {
+			checkIfDiscussionsAllowed()
+		})
+	} else {
+		// For recording lessons without editor, check discussions directly
 		checkIfDiscussionsAllowed()
-	})
+	}
 	checkQuiz()
 }
 
@@ -754,11 +773,19 @@ onBeforeUnmount(() => {
 
 const checkIfDiscussionsAllowed = () => {
 	hasQuiz.value = false
-	JSON.parse(lesson.data?.content)?.blocks?.forEach((block) => {
-		if (block.type === 'quiz') {
-			hasQuiz.value = true
-		}
-	})
+	// Skip quiz check for recording lessons (content starts with "live_class:")
+	if (!lesson.data?.content || lesson.data.content.startsWith('live_class:')) {
+		return
+	}
+	try {
+		JSON.parse(lesson.data.content)?.blocks?.forEach((block) => {
+			if (block.type === 'quiz') {
+				hasQuiz.value = true
+			}
+		})
+	} catch (e) {
+		// Content is not valid JSON, skip quiz check
+	}
 
 	if (
 		!hasQuiz.value &&
