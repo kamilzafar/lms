@@ -243,13 +243,15 @@
 						>
 							<LessonContent :content="lesson.data.instructor_notes" />
 						</div>
+						<!-- Editor rendering for regular lessons (not recordings) -->
 						<div
-							v-if="lesson.data.content"
+							v-if="lesson.data.content && !lesson.data.content.startsWith('live_class:')"
 							@mouseup="toggleInlineMenu"
 							class="ProseMirror prose prose-table:table-fixed prose-td:p-2 prose-th:p-2 prose-td:border prose-th:border prose-td:border-outline-gray-2 prose-th:border-outline-gray-2 prose-td:relative prose-th:relative prose-th:bg-surface-gray-2 prose-sm max-w-none !whitespace-normal mt-8"
 						>
 							<div id="editor"></div>
 						</div>
+						<!-- Recording or other content rendering -->
 						<div
 							v-else
 							class="ProseMirror prose prose-table:table-fixed prose-td:p-2 prose-th:p-2 prose-td:border prose-th:border prose-td:border-outline-gray-2 prose-th:border-outline-gray-2 prose-td:relative prose-th:relative prose-th:bg-surface-gray-2 prose-sm max-w-none !whitespace-normal mt-8"
@@ -259,6 +261,7 @@
 								v-if="lesson.data?.content && lesson.data.content.startsWith('live_class:')"
 								:liveClassId="lesson.data.content.replace('live_class:', '')"
 							/>
+							<!-- YouTube, HTML, Markdown, and other content types -->
 							<LessonContent
 								v-else-if="lesson.data?.body"
 								:content="lesson.data.body"

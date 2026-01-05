@@ -2292,20 +2292,35 @@ def get_recording_secure(token, live_class):
 	referer = frappe.request.headers.get('Referer', '') if frappe.request else ''
 	site_url = frappe.utils.get_url()
 
-	if referer and not referer.startswith(site_url):
-		frappe.logger().warning(
-			f"[Recording Security] Invalid referer: {referer} for user {frappe.session.user} accessing {live_class}"
-		)
-		frappe.throw(_("Access denied: Invalid request origin"))
+	if referer:
+		# Normalize URLs to handle protocol/port mismatches
+		# Extract domain from both URLs for comparison
+		from urllib.parse import urlparse
+		referer_parsed = urlparse(referer)
+		site_parsed = urlparse(site_url)
 
-	# Validate token
-	cache_key = f"recording_token_{live_class}_{frappe.session.user}_{token}"
+		referer_domain = f"{referer_parsed.scheme}://{referer_parsed.netloc}"
+		site_domain = f"{site_parsed.scheme}://{site_parsed.netloc}"
+
+		# Also check if referer matches without protocol (handles mixed HTTP/HTTPS)
+		referer_netloc = referer_parsed.netloc
+		site_netloc = site_parsed.netloc
+
+		if referer_domain != site_domain and referer_netloc != site_netloc:
+			frappe.logger().warning(
+				f"[Recording Security] Invalid referer: {referer} (expected: {site_url}) for user {frappe.session.user}"
+			)
+			frappe.throw(_("Access denied: Invalid request origin"))
+
+	# Get live class document first to normalize the name
+	live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+
+	# Validate token using normalized live_class_doc.name (same as how it was stored)
+	cache_key = f"recording_token_{live_class_doc.name}_{frappe.session.user}_{token}"
 	token_data = frappe.cache().get_value(cache_key)
 
 	if not token_data:
 		frappe.throw(_("Recording access token expired or invalid. Please reload and try again."))
-
-	live_class_doc = frappe.get_doc("LMS Live Class", live_class)
 
 	# Check if user is admin/moderator (skip enrollment check)
 	user_roles = frappe.get_roles(frappe.session.user)
@@ -2313,26 +2328,58 @@ def get_recording_secure(token, live_class):
 
 	if not is_privileged:
 		# Re-verify access (enrollment could have changed)
-		enrolled_batches = frappe.get_all(
-			"LMS Batch Enrollment",
-			{"member": frappe.session.user},
-			pluck="batch"
-		)
+		has_access = False
 
-		if live_class_doc.batch_name not in enrolled_batches:
-			batch_courses = frappe.get_all(
-				"Batch Course",
-				{"parent": live_class_doc.batch_name},
-				pluck="course"
-			)
-			enrolled_courses = frappe.get_all(
-				"LMS Enrollment",
+		# Check batch enrollment
+		if live_class_doc.batch_name:
+			enrolled_batches = frappe.get_all(
+				"LMS Batch Enrollment",
 				{"member": frappe.session.user},
-				pluck="course"
+				pluck="batch"
 			)
+			if live_class_doc.batch_name in enrolled_batches:
+				has_access = True
 
-			if not any(course in enrolled_courses for course in batch_courses):
-				frappe.throw(_("You don't have access to this recording"))
+			# If not directly in batch, check course enrollment via batch
+			if not has_access:
+				batch_courses = frappe.get_all(
+					"Batch Course",
+					{"parent": live_class_doc.batch_name},
+					pluck="course"
+				)
+				if batch_courses:
+					enrolled_courses = frappe.get_all(
+						"LMS Enrollment",
+						{"member": frappe.session.user},
+						pluck="course"
+					)
+					if any(course in enrolled_courses for course in batch_courses):
+						has_access = True
+
+		# If no batch or batch check failed, check direct course enrollment
+		if not has_access:
+			# Try to find course from batch (if batch exists)
+			course_to_check = None
+			if live_class_doc.batch_name:
+				batch_courses = frappe.get_all(
+					"Batch Course",
+					{"parent": live_class_doc.batch_name},
+					pluck="course"
+				)
+				course_to_check = batch_courses[0] if batch_courses else None
+
+			# If we found a course, check enrollment
+			if course_to_check:
+				user_courses = frappe.get_all(
+					"LMS Enrollment",
+					{"member": frappe.session.user},
+					pluck="course"
+				)
+				if course_to_check in user_courses:
+					has_access = True
+
+		if not has_access:
+			frappe.throw(_("You don't have access to this recording"))
 
 	# Log access
 	_log_recording_access(live_class_doc.name, "view", frappe.session.user)
@@ -2368,6 +2415,10 @@ def get_recording_secure(token, live_class):
 		frappe.logger().warning(f"[Recording Secure] No password found in recording_password field for {live_class}")
 
 	# Return HTML with embedded iframe (URL stays on backend)
+	# HTML-escape title to prevent XSS attacks
+	import html
+	safe_title = html.escape(live_class_doc.title or "Recording")
+
 	html_content = f'''
 	<div class="recording-container" style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; overflow: hidden; border-radius: 0.375rem;">
 		<iframe
@@ -2377,7 +2428,7 @@ def get_recording_secure(token, live_class):
 			sandbox="allow-scripts allow-same-origin allow-presentation"
 			allowfullscreen="true"
 			allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-			title="{live_class_doc.title}"
+			title="{safe_title}"
 			referrerpolicy="no-referrer"
 			controlsList="nodownload">
 		</iframe>
@@ -2386,10 +2437,10 @@ def get_recording_secure(token, live_class):
 
 	# Add security headers to prevent external embedding and protect against attacks
 	response = Response(html_content, status=200, content_type="text/html")
-	response.headers['X-Frame-Options'] = 'DENY'
+	response.headers['X-Frame-Options'] = 'SAMEORIGIN'  # Allow embedding on same domain, CSP provides additional restrictions
 	response.headers['X-Content-Type-Options'] = 'nosniff'
 	response.headers['Referrer-Policy'] = 'no-referrer'
-	response.headers['Content-Security-Policy'] = "frame-ancestors 'self'; frame-src https://zoom.us https://*.zoom.us; default-src 'self'"
+	response.headers['Content-Security-Policy'] = "frame-ancestors 'self'; script-src 'unsafe-inline' https://zoom.us https://*.zoom.us; frame-src https://zoom.us https://*.zoom.us; style-src 'unsafe-inline' https://zoom.us https://*.zoom.us"
 	response.headers['Permissions-Policy'] = "autoplay=(self), encrypted-media=(self), fullscreen=(self), picture-in-picture=(self)"
 	return response
 
