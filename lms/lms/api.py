@@ -2244,19 +2244,30 @@ def get_recording_embed_url(live_class):
 	# Log access
 	_log_recording_access(live_class_doc.name, "request", frappe.session.user)
 
-	# Generate secure token (no expiration needed since URL never exposed to frontend)
-	# Token is just a session identifier - access control verified on every request
+	# Generate secure token with expiration based on recording duration
 	token = frappe.generate_hash(length=32)
 
-	# Store token in cache (no expiration - URL is never exposed, so token reuse is safe)
+	# Calculate token TTL: recording duration + 30 minute buffer for user convenience
+	# Get duration from live class (in minutes), fallback to 120 minutes (2 hours)
+	recording_duration_minutes = live_class_doc.duration or 120
+	ttl_seconds = (recording_duration_minutes * 60) + 1800  # Add 30 min buffer
+
+	current_time = now()
+	expires_at = current_time + timedelta(seconds=ttl_seconds)
+
+	# Store token in cache with expiration
 	cache_key = f"recording_token_{live_class_doc.name}_{frappe.session.user}_{token}"
 	frappe.cache().set_value(
 		cache_key,
 		{
 			"live_class": live_class_doc.name,
 			"user": frappe.session.user,
-			"created_at": now()
-		}
+			"created_at": current_time,
+			"expires_at": expires_at,
+			"recording_duration": recording_duration_minutes,
+			"ip_address": frappe.request.remote_addr if frappe.request else "unknown"
+		},
+		expires_in_sec=ttl_seconds
 	)
 
 	return {
@@ -2267,7 +2278,7 @@ def get_recording_embed_url(live_class):
 	}
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_recording_secure(token, live_class):
 	"""
 	Secure backend proxy for recording embed.
@@ -2276,6 +2287,16 @@ def get_recording_secure(token, live_class):
 	"""
 	if frappe.session.user == "Guest":
 		frappe.throw(_("Please login to view recordings"))
+
+	# Validate request origin (prevent external embedding)
+	referer = frappe.request.headers.get('Referer', '') if frappe.request else ''
+	site_url = frappe.utils.get_url()
+
+	if referer and not referer.startswith(site_url):
+		frappe.logger().warning(
+			f"[Recording Security] Invalid referer: {referer} for user {frappe.session.user} accessing {live_class}"
+		)
+		frappe.throw(_("Access denied: Invalid request origin"))
 
 	# Validate token
 	cache_key = f"recording_token_{live_class}_{frappe.session.user}_{token}"
@@ -2353,15 +2374,24 @@ def get_recording_secure(token, live_class):
 			src="{embed_url}"
 			style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;"
 			frameborder="0"
+			sandbox="allow-scripts allow-same-origin allow-presentation"
 			allowfullscreen="true"
-			allow="autoplay; encrypted-media; fullscreen; picture-in-picture; microphone; camera"
+			allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
 			title="{live_class_doc.title}"
-			referrerpolicy="no-referrer-when-downgrade">
+			referrerpolicy="no-referrer"
+			controlsList="nodownload">
 		</iframe>
 	</div>
 	'''
 
-	return Response(html_content, status=200, content_type="text/html")
+	# Add security headers to prevent external embedding and protect against attacks
+	response = Response(html_content, status=200, content_type="text/html")
+	response.headers['X-Frame-Options'] = 'DENY'
+	response.headers['X-Content-Type-Options'] = 'nosniff'
+	response.headers['Referrer-Policy'] = 'no-referrer'
+	response.headers['Content-Security-Policy'] = "frame-ancestors 'self'; frame-src https://zoom.us https://*.zoom.us; default-src 'self'"
+	response.headers['Permissions-Policy'] = "autoplay=(self), encrypted-media=(self), fullscreen=(self), picture-in-picture=(self)"
+	return response
 
 
 def _log_recording_access(live_class_name, access_type, user):

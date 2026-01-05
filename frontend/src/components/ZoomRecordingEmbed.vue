@@ -20,18 +20,20 @@
 				{{ __('Retry') }}
 			</Button>
 		</div>
-		<div v-else-if="recordingToken" class="relative w-full bg-black rounded-md overflow-hidden" style="padding-bottom: 56.25%; height: 0;">
+		<div v-else-if="recordingToken" class="relative w-full bg-black rounded-md overflow-hidden zoom-recording-container" style="padding-bottom: 56.25%; height: 0; user-select: none;" @contextmenu.prevent>
 			<!-- Secure proxy iframe - URL is never exposed to frontend -->
 			<iframe
 				:src="`/api/method/lms.lms.api.get_recording_secure?token=${recordingToken}&live_class=${liveClassId}`"
 				class="absolute top-0 left-0 w-full h-full border-0"
 				frameborder="0"
+				sandbox="allow-scripts allow-same-origin allow-presentation"
 				allowfullscreen
-				allow="autoplay; encrypted-media; fullscreen; picture-in-picture; microphone; camera"
+				allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
 				:title="recordingTitle || __('Zoom Recording')"
 				@load="onIframeLoad"
 				@error="onIframeError"
-				referrerpolicy="no-referrer-when-downgrade"
+				referrerpolicy="no-referrer"
+				controlsList="nodownload"
 			></iframe>
 			<div v-if="iframeLoading" class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-10">
 				<span class="text-white text-sm">{{ __('Loading video player...') }}</span>
@@ -170,3 +172,11 @@ onBeforeUnmount(() => {
 })
 </script>
 
+<style scoped>
+.zoom-recording-container {
+	user-select: none;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+}
+</style>
