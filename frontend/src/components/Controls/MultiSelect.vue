@@ -170,15 +170,28 @@ watchDebounced(
 	{ debounce: 300, immediate: true }
 )
 
-const filterOptions = createResource({
-	url: 'frappe.desk.search.search_link',
-	method: 'POST',
-	cache: [text.value, props.doctype],
-	auto: true,
-	params: {
-		txt: text.value,
+// ✅ Consolidated API params: Same parameter names for all doctypes
+// get_instructor_users accepts 'txt' parameter for compatibility with frappe.desk.search.search_link
+const getApiParams = (searchText) => {
+	const baseParams = {
+		txt: searchText,
 		doctype: props.doctype,
-	},
+	}
+	// Only add filters for non-User doctypes
+	if (props.doctype !== 'User') {
+		baseParams.filters = props.filters
+	}
+	return baseParams
+}
+
+const filterOptions = createResource({
+	url: props.doctype === 'User' ? 'lms.lms.api.get_instructor_users' : 'frappe.desk.search.search_link',
+	method: 'POST',
+	// ✅ Fixed: Cache doesn't include dynamic text.value to prevent race conditions
+	// Use only doctype for cache key (content varies, but endpoint behavior is stable)
+	cache: [props.doctype],
+	auto: true,
+	params: getApiParams(text.value),
 })
 
 const options = computed(() => {
@@ -187,11 +200,9 @@ const options = computed(() => {
 })
 
 function reload(val) {
+	// ✅ Fixed: Use consolidated API params function
 	filterOptions.update({
-		params: {
-			txt: val,
-			doctype: props.doctype,
-		},
+		params: getApiParams(val),
 	})
 	filterOptions.reload()
 }

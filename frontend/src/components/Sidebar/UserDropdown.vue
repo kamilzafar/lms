@@ -58,7 +58,7 @@
 		</Dropdown>
 	</div>
 	<SettingsModal
-		v-if="userResource.data?.is_moderator"
+		v-if="userResource.data?.is_system_manager || userResource.data?.is_moderator"
 		v-model="showSettingsModal"
 	/>
 </template>
@@ -167,7 +167,7 @@ const userDropdownOptions = computed(() => {
 						settingsStore.isSettingsOpen = true
 					},
 					condition: () => {
-						return userResource.data?.is_moderator
+						return userResource.data?.is_system_manager || userResource.data?.is_moderator
 					},
 				},
 				{
@@ -179,7 +179,7 @@ const userDropdownOptions = computed(() => {
 						},
 					],
 					condition: () => {
-						return userResource.data?.is_moderator
+						return userResource.data?.is_system_manager || userResource.data?.is_moderator
 					},
 				},
 				{

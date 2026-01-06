@@ -391,6 +391,81 @@ def get_all_users():
 
 
 @frappe.whitelist()
+def get_instructor_users(txt=''):
+	"""
+	Get users with LMS Teacher, Batch Evaluator, or Course Creator roles.
+	Used for instructor selection in course/batch forms.
+
+	Args:
+		txt (str): Search text (compatible with frappe.desk.search.search_link)
+
+	Returns:
+		list: [{value: user_email, description: user_full_name}, ...]
+	"""
+	# ✅ Permission check: Only moderators, course creators, batch evaluators can access
+	frappe.only_for(["Moderator", "Course Creator", "Batch Evaluator"])
+
+	# Get search text from parameter
+	search_text = txt or ''
+
+	# ✅ Input validation: Prevent DoS with very long search strings
+	if len(search_text) > 100:
+		search_text = search_text[:100]
+
+	try:
+		# ✅ Instructor roles that should appear in dropdown
+		instructor_roles = ["LMS Teacher", "Batch Evaluator", "Course Creator"]
+
+		# ✅ OPTIMIZED: Use database filter to search and get enabled users
+		# This reduces database load and moves filtering to DB level
+		filters = {"enabled": 1}
+
+		# ✅ Server-side search filtering: Use LIKE query at DB level
+		if search_text:
+			filters = {
+				"enabled": 1,
+				"or_filters": [
+					["name", "like", f"%{search_text}%"],
+					["full_name", "like", f"%{search_text}%"]
+				]
+			}
+
+		# Get matching enabled users (now pre-filtered by search and enabled status)
+		matching_users = frappe.get_all(
+			"User",
+			filters,
+			["name", "full_name"]
+		)
+
+		# ✅ Filter users to only those with instructor roles
+		# Now we only call get_roles() for MATCHING users, not ALL users (huge performance win)
+		filtered_users = []
+		for user in matching_users:
+			try:
+				user_roles = frappe.get_roles(user.name)
+				# Check if user has ANY of the instructor roles
+				if any(role in user_roles for role in instructor_roles):
+					filtered_users.append({
+						"value": user.name,
+						"description": user.full_name or user.name
+					})
+			except Exception as user_error:
+				# ✅ Error handling: Log and skip problematic users
+				frappe.logger().warning(
+					f"[get_instructor_users] Error fetching roles for {user.name}: {user_error}"
+				)
+				continue
+
+		return filtered_users
+
+	except Exception as e:
+		# ✅ Error handling: Gracefully handle endpoint errors
+		frappe.logger().error(f"[get_instructor_users] Error: {e}")
+		frappe.throw(_("Error loading instructors. Please try again."))
+		return []
+
+
+@frappe.whitelist()
 def mark_as_read(name):
 	doc = frappe.get_doc("Notification Log", name)
 	doc.read = 1
