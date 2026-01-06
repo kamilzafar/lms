@@ -409,9 +409,15 @@ const meta = reactive({
 })
 
 onMounted(() => {
-	// Teachers (LMS Teacher role) cannot create or edit courses
+	// Teachers (LMS Teacher role) cannot create or edit courses UNLESS they also have admin roles
 	// System Managers, Course Creators, and Moderators can create/edit courses
-	if (user.data?.is_teacher || (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor)) {
+	// Block only if teacher AND (NOT system_manager AND NOT moderator AND NOT instructor)
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
+		router.push({ name: 'Courses' })
+		return
+	}
+	// Block if user has NONE of the required roles
+	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
 		router.push({ name: 'Courses' })
 		return
 	}

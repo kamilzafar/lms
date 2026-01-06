@@ -30,7 +30,7 @@
 						/>
 						<MultiSelect
 							v-model="instructors"
-							doctype="Course Evaluator"
+							doctype="User"
 							:label="__('Instructors')"
 							:required="true"
 							:onCreate="(close) => openSettings('Evaluators', close)"
