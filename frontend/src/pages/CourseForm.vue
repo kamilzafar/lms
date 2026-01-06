@@ -44,7 +44,6 @@
 								:label="__('Instructors')"
 								:filters="{ ignore_user_type: 1 }"
 								:onCreate="(close) => openSettings('Members', close)"
-								:required="true"
 							/>
 							<div>
 								<div class="text-xs text-ink-gray-5">
@@ -411,8 +410,8 @@ const meta = reactive({
 
 onMounted(() => {
 	// Teachers (LMS Teacher role) cannot create or edit courses
-	// Only Content Makers (Course Creator) and Moderators can
-	if (user.data?.is_teacher || (!user.data?.is_moderator && !user.data?.is_instructor)) {
+	// System Managers, Course Creators, and Moderators can create/edit courses
+	if (user.data?.is_teacher || (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor)) {
 		router.push({ name: 'Courses' })
 		return
 	}

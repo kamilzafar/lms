@@ -127,7 +127,7 @@ const props = defineProps({
 })
 
 onMounted(() => {
-	if (!user.data?.is_moderator && !user.data?.is_instructor) {
+	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
 		window.location.href = '/login'
 	}
 	capture('lesson_form_opened')
