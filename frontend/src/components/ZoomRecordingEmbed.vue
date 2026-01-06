@@ -20,8 +20,9 @@
 				{{ __('Retry') }}
 			</Button>
 		</div>
-		<div v-else-if="recordingToken" class="relative w-full bg-black rounded-md overflow-hidden zoom-recording-container" style="padding-bottom: 56.25%; height: 0; user-select: none;" @contextmenu.prevent>
+		<div v-else-if="recordingToken" class="relative w-full bg-black rounded-md overflow-hidden zoom-recording-container" style="padding-bottom: 56.25%; height: 0; user-select: none;" @contextmenu.prevent @dragstart.prevent @drop.prevent>
 			<!-- Secure proxy iframe - URL is never exposed to frontend -->
+			<!-- Security: sandbox (restrictive), controlsList (nodownload), referrerpolicy (no-referrer), drag/drop prevented -->
 			<iframe
 				:src="`/api/method/lms.lms.api.get_recording_secure?token=${recordingToken}&live_class=${liveClassId}`"
 				class="absolute top-0 left-0 w-full h-full border-0"

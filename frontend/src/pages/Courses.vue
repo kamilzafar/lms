@@ -153,30 +153,11 @@
 			</div>
 		</div>
 
-		<!-- Recorded Lectures Section (only for Recording tab) -->
-		<div v-if="currentTab === 'Recording' && recordedLectures.data?.length" class="mb-10">
-			<div class="text-lg font-semibold text-ink-gray-9 mb-5">
-				{{ __('Recorded Lectures') }}
-			</div>
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-				<div
-					v-for="lecture in recordedLectures.data"
-					:key="lecture.name"
-					class="border rounded-md p-4 hover:border-outline-gray-3 cursor-pointer transition-colors"
-					@click="openRecordingModal(lecture)"
-				>
-					<div class="font-semibold text-ink-gray-9 mb-2">{{ lecture.title }}</div>
-					<div class="text-sm text-ink-gray-7 mb-2">{{ lecture.course_title }}</div>
-					<div class="text-xs text-ink-gray-5">
-						{{ dayjs(lecture.date).format('DD MMM YYYY') }}
-					</div>
-				</div>
-			</div>
-		</div>
+		<!-- Recorded lectures are now only accessible from within the course itself -->
 
 		<!-- Courses Section -->
 		<div
-			v-if="courses.data?.length && currentTab !== 'Recording' && !(currentTab === 'Live' && user.data?.is_student)"
+			v-if="courses.data?.length && !(currentTab === 'Live' && user.data?.is_student)"
 			class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-8"
 		>
 			<router-link
@@ -186,11 +167,10 @@
 				<CourseCard :course="course" />
 			</router-link>
 		</div>
-		<EmptyState v-else-if="!courses.list.loading && currentTab !== 'Recording' && !(currentTab === 'Live' && user.data?.is_student)" type="Courses" />
-		<EmptyState v-else-if="currentTab === 'Recording' && !recordedLectures.list.loading && !recordedLectures.data?.length" type="Courses" />
+		<EmptyState v-else-if="!courses.list.loading && !(currentTab === 'Live' && user.data?.is_student)" type="Courses" />
 		<EmptyState v-else-if="currentTab === 'Live' && user.data?.is_student && !liveClasses.list.loading && !liveClasses.data?.length" type="Courses" />
 		<div
-			v-if="!courses.list.loading && courses.hasNextPage && currentTab !== 'Recording' && !(currentTab === 'Live' && user.data?.is_student)"
+			v-if="!courses.list.loading && courses.hasNextPage && !(currentTab === 'Live' && user.data?.is_student)"
 			class="flex justify-center mt-5"
 		>
 			<Button @click="courses.next()">
@@ -198,26 +178,6 @@
 			</Button>
 		</div>
 	</div>
-
-	<!-- Recording Modal -->
-	<Dialog
-		v-model="showRecordingModal"
-		:options="{
-			title: currentRecording?.title || __('Recorded Lecture'),
-			size: '2xl',
-		}"
-	>
-		<template #body-content>
-			<div v-if="currentRecording" class="p-4">
-				<div v-if="currentRecording.description" class="mb-4 text-ink-gray-7">
-					{{ currentRecording.description }}
-				</div>
-				<div style="min-height: 600px; width: 100%;">
-					<ZoomRecordingEmbed :liveClassId="currentRecording.name" />
-				</div>
-			</div>
-		</template>
-	</Dialog>
 </template>
 <script setup>
 import {
@@ -285,8 +245,8 @@ onMounted(() => {
 			currentTab.value = 'All'
 		}
 	} else if (isStudent) {
-		// Students can access Enrolled, Live, and Recording tabs
-		const validStudentTabs = ['Enrolled', 'Live', 'Recording']
+		// Students can access Enrolled and Live tabs only (recordings are within courses)
+		const validStudentTabs = ['Enrolled', 'Live']
 		if (!validStudentTabs.includes(currentTab.value)) {
 			currentTab.value = 'Enrolled'
 		} else if (currentTab.value === 'Live' && !location.search.includes('tab=')) {
@@ -519,10 +479,7 @@ const updateCategories = (data) => {
 }
 
 watch(currentTab, () => {
-	if (currentTab.value === 'Recording') {
-		// Load recorded lectures when Recording tab is selected
-		recordedLectures.reload()
-	} else if (currentTab.value === 'Live' && user.data?.is_student) {
+	if (currentTab.value === 'Live' && user.data?.is_student) {
 		// Load live classes when Live tab is selected for students
 		liveClasses.reload()
 	} else {
@@ -591,16 +548,14 @@ const courseTabs = computed(() => {
 	const isTeacher = user.data?.is_teacher
 
 	if (isStudent) {
-		// Students see Enrolled, Live, and Recording tabs
+		// Students see Enrolled and Live tabs only
+		// Recordings are accessed from within the course itself
 		return [
 			{
 				label: __('Enrolled'),
 			},
 			{
 				label: __('Live'),
-			},
-			{
-				label: __('Recording'),
 			},
 		]
 	}

@@ -1,5 +1,5 @@
 <template>
-	<FrappeUIProvider>
+	<FrappeUIProvider @contextmenu.prevent="handleContextMenu" class="lms-app-container">
 		<Layout class="isolate text-base">
 			<router-view />
 		</Layout>
@@ -10,7 +10,7 @@
 <script setup>
 import { FrappeUIProvider } from 'frappe-ui'
 import { Dialogs } from '@/utils/dialogs'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useScreenSize } from './utils/composables'
 import { usersStore } from '@/stores/user'
 import { useSettings } from '@/stores/settings'
@@ -46,8 +46,72 @@ const Layout = computed(() => {
 	return DesktopLayout
 })
 
-onUnmounted(() => {
-	noSidebar.value = false
+// Global Security Feature: Right-Click Prevention
+const handleContextMenu = (event) => {
+	event.preventDefault()
+	return false
+}
+
+// Global Security Feature: Developer Tools Prevention
+const handleKeyDown = (event) => {
+	// Block F12 (open dev tools)
+	if (event.key === 'F12') {
+		event.preventDefault()
+		return false
+	}
+
+	// Block Ctrl+Shift+I (Inspect Element)
+	if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'I') {
+		event.preventDefault()
+		return false
+	}
+
+	// Block Ctrl+Shift+C (Inspect Element - Chrome)
+	if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'C') {
+		event.preventDefault()
+		return false
+	}
+
+	// Block Ctrl+Shift+J (Console)
+	if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'J') {
+		event.preventDefault()
+		return false
+	}
+
+	// Block Ctrl+Shift+K (Console - Firefox)
+	if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'K') {
+		event.preventDefault()
+		return false
+	}
+}
+
+// Setup global security event listeners on mount
+onMounted(() => {
+	document.addEventListener('keydown', handleKeyDown, true)
+	document.addEventListener('contextmenu', handleContextMenu, true)
+
+	// Additional DevTools detection - check if console is open
+	// This is a basic check; advanced users can still bypass this
+	const detectDevTools = () => {
+		const start = performance.now()
+		debugger
+		const end = performance.now()
+
+		if (end - start > 100) {
+			console.clear()
+		}
+	}
+
+	// Run detection every 2 seconds
+	const devToolsInterval = setInterval(detectDevTools, 2000)
+
+	// Cleanup on unmount
+	onUnmounted(() => {
+		document.removeEventListener('keydown', handleKeyDown, true)
+		document.removeEventListener('contextmenu', handleContextMenu, true)
+		clearInterval(devToolsInterval)
+		noSidebar.value = false
+	})
 })
 
 watch(userResource, () => {
@@ -56,3 +120,24 @@ watch(userResource, () => {
 	}
 })
 </script>
+
+<style scoped>
+/* Global Security: Disable text selection across entire LMS */
+.lms-app-container {
+	user-select: none;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+}
+
+/* Prevent drag selection of text */
+.lms-app-container ::selection {
+	background: transparent;
+	color: inherit;
+}
+
+.lms-app-container ::-moz-selection {
+	background: transparent;
+	color: inherit;
+}
+</style>
