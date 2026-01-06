@@ -396,6 +396,7 @@ const canCreateBatch = () => {
 	if (user.data?.is_teacher) return false
 	if (readOnlyMode) return false
 	if (
+		user.data?.is_system_manager ||
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
 		user.data?.is_evaluator
