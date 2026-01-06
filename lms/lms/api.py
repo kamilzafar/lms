@@ -50,6 +50,7 @@ def get_user_info():
 	user.is_evaluator = "Batch Evaluator" in user.roles
 	user.is_student = "LMS Student" in user.roles
 	user.is_teacher = "LMS Teacher" in user.roles
+	user.is_lms_admin = "LMS Admin" in user.roles
 	user.is_fc_site = is_fc_site()
 	user.is_system_manager = "System Manager" in user.roles
 	user.sitename = frappe.local.site
@@ -255,7 +256,7 @@ def get_unsplash_photos(keyword=None):
 
 @frappe.whitelist()
 def get_evaluator_details(evaluator):
-	frappe.only_for("Batch Evaluator")
+	frappe.only_for(["Batch Evaluator", "LMS Admin", "System Manager"])
 
 	if not frappe.db.exists("Google Calendar", {"user": evaluator}):
 		calendar = frappe.new_doc("Google Calendar")
@@ -378,7 +379,7 @@ def get_assigned_badges(member):
 
 @frappe.whitelist()
 def get_all_users():
-	frappe.only_for(["Moderator", "Course Creator", "Batch Evaluator"])
+	frappe.only_for(["Moderator", "Course Creator", "Batch Evaluator", "LMS Admin", "System Manager"])
 	users = frappe.get_all(
 		"User",
 		{
@@ -402,8 +403,8 @@ def get_instructor_users(txt=''):
 	Returns:
 		list: [{value: user_email, description: user_full_name}, ...]
 	"""
-	# ✅ Permission check: Only moderators, course creators, batch evaluators can access
-	frappe.only_for(["Moderator", "Course Creator", "Batch Evaluator"])
+	# ✅ Permission check: Only moderators, course creators, batch evaluators, lms admin, system manager can access
+	frappe.only_for(["Moderator", "Course Creator", "Batch Evaluator", "LMS Admin", "System Manager"])
 
 	# Get search text from parameter
 	search_text = txt or ''
@@ -794,7 +795,7 @@ def save_certificate_details(
 
 @frappe.whitelist()
 def delete_documents(doctype, documents):
-	frappe.only_for("Moderator")
+	frappe.only_for(["Moderator", "LMS Admin", "System Manager"])
 	for doc in documents:
 		frappe.delete_doc(doctype, doc)
 
@@ -1462,7 +1463,7 @@ def get_certification_details(course):
 
 @frappe.whitelist()
 def save_role(user, role, value):
-	frappe.only_for("Moderator")
+	frappe.only_for(["Moderator", "LMS Admin", "System Manager"])
 	if cint(value):
 		doc = frappe.get_doc(
 			{
@@ -1482,7 +1483,7 @@ def save_role(user, role, value):
 
 @frappe.whitelist()
 def add_an_evaluator(email):
-	frappe.only_for("Moderator")
+	frappe.only_for(["Moderator", "LMS Admin", "System Manager"])
 	if not frappe.db.exists("User", email):
 		user = frappe.new_doc("User")
 		user.update(
@@ -1504,7 +1505,7 @@ def add_an_evaluator(email):
 
 @frappe.whitelist()
 def delete_evaluator(evaluator):
-	frappe.only_for("Moderator")
+	frappe.only_for(["Moderator", "LMS Admin", "System Manager"])
 	if not frappe.db.exists("Course Evaluator", evaluator):
 		frappe.throw(_("Evaluator does not exist."))
 
@@ -1514,7 +1515,7 @@ def delete_evaluator(evaluator):
 
 @frappe.whitelist()
 def capture_user_persona(responses):
-	frappe.only_for("System Manager")
+	frappe.only_for(["System Manager", "LMS Admin"])
 	data = frappe.parse_json(responses)
 	data = json.dumps(data)
 	response = frappe.integrations.utils.make_post_request(

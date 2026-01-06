@@ -147,9 +147,9 @@ onMounted(() => {
 })
 
 const fetchZoomAccounts = () => {
-	if (!user?.data?.is_moderator && !user?.data?.is_evaluator) return
+	if (!user?.data?.is_moderator && !user?.data?.is_evaluator && !user?.data?.is_lms_admin) return
 
-	if (!user?.data?.is_moderator) {
+	if (!user?.data?.is_moderator && !user?.data?.is_lms_admin) {
 		zoomAccounts.update({
 			filters: {
 				member: user.data.name,

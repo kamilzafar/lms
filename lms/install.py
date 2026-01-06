@@ -21,6 +21,7 @@ def before_uninstall():
 
 
 def create_lms_roles():
+	create_lms_admin_role()
 	create_course_creator_role()
 	create_moderator_role()
 	create_evaluator_role()
@@ -33,6 +34,22 @@ def delete_lms_roles():
 	for role in roles:
 		if frappe.db.exists("Role", role):
 			frappe.db.delete("Role", role)
+
+
+def create_lms_admin_role():
+	"""Create LMS Admin role - full administrative access to all LMS features."""
+	if frappe.db.exists("Role", "LMS Admin"):
+		frappe.db.set_value("Role", "LMS Admin", "desk_access", 1)
+	else:
+		role = frappe.new_doc("Role")
+		role.update(
+			{
+				"role_name": "LMS Admin",
+				"home_page": "",
+				"desk_access": 1,
+			}
+		)
+		role.save()
 
 
 def create_course_creator_role():
@@ -193,7 +210,7 @@ def create_batch_source():
 
 
 def give_lms_roles_to_admin():
-	roles = ["Course Creator", "Moderator", "Batch Evaluator"]
+	roles = ["LMS Admin", "Course Creator", "Moderator", "Batch Evaluator"]
 	for role in roles:
 		if not frappe.db.exists("Has Role", {"parent": "Administrator", "role": role}):
 			doc = frappe.new_doc("Has Role")
