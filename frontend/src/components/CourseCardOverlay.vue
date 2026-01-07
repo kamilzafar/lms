@@ -261,9 +261,9 @@ const is_instructor = () => {
 }
 
 const canEditCourse = () => {
-	// Teachers cannot edit courses, System Managers, Course Creators, and Moderators can
+	// Teachers cannot edit courses, System Managers, LMS Admins, Course Creators, and Moderators can
 	if (user.data?.is_teacher) return false
-	return user.data?.is_system_manager || user.data?.is_moderator || is_instructor()
+	return user.data?.is_system_manager || user.data?.is_moderator || user.data?.is_lms_admin || is_instructor()
 }
 
 const canGetCertificate = computed(() => {

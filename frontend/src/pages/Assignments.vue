@@ -103,7 +103,7 @@ const route = useRoute()
 const readOnlyMode = window.read_only_mode
 
 onMounted(() => {
-	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
+	if (!user.data?.is_system_manager && !user.data?.is_lms_admin && !user.data?.is_moderator && !user.data?.is_instructor) {
 		router.push({ name: 'Courses' })
 	}
 	if (route.query.new === 'true') {
@@ -140,7 +140,7 @@ const assignmentFilter = computed(() => {
 	if (typeFilter.value) {
 		filters.type = typeFilter.value
 	}
-	if (!user.data?.is_moderator) {
+	if (!user.data?.is_moderator && !user.data?.is_lms_admin && !user.data?.is_system_manager) {
 		filters.owner = user.data?.email
 	}
 	return filters

@@ -385,8 +385,8 @@ watch(tabIndex, () => {
 })
 
 const canMakeAnnouncement = () => {
-	// Teachers cannot make announcements - only Admin, Content Maker, Moderator, Evaluator can
-	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator) {
+	// Teachers cannot make announcements - only Admin, LMS Admin, Content Maker, Moderator, Evaluator can
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_lms_admin && !user.data?.is_instructor && !user.data?.is_moderator) {
 		return false
 	}
 	if (readOnlyMode) return false
@@ -395,13 +395,13 @@ const canMakeAnnouncement = () => {
 }
 
 const isAdmin = computed(() => {
-	// Admin, Content Maker, Moderator, Evaluator can manage batches
-	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
+	// Admin, LMS Admin, Content Maker, Moderator, Evaluator can manage batches
+	return user.data?.is_system_manager || user.data?.is_lms_admin || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
 })
 
 const isTeacher = computed(() => {
 	// Teachers can view but not manage - check they're not also an admin
-	return user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator && !user.data?.is_evaluator
+	return user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_lms_admin && !user.data?.is_instructor && !user.data?.is_moderator && !user.data?.is_evaluator
 })
 
 usePageMeta(() => {

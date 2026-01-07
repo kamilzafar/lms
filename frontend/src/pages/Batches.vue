@@ -392,14 +392,15 @@ const batchTabs = computed(() => {
 })
 
 const canCreateBatch = () => {
-	// Teachers cannot create batches, only Content Makers can
+	// Teachers cannot create batches, only Content Makers and Admins can
 	if (user.data?.is_teacher) return false
 	if (readOnlyMode) return false
 	if (
 		user.data?.is_system_manager ||
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
-		user.data?.is_evaluator
+		user.data?.is_evaluator ||
+		user.data?.is_lms_admin
 	)
 		return true
 	return false

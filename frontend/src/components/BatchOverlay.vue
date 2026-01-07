@@ -218,15 +218,15 @@ const isInstructor = computed(() => {
 })
 
 const canAccessBatch = computed(() => {
-	// Anyone with admin/content maker/moderator/evaluator/teacher role can access batch
-	return user.data?.is_system_manager || user.data?.is_instructor || isModerator.value || isEvaluator.value || isStudent.value || user.data?.is_teacher
+	// Anyone with admin/lms admin/content maker/moderator/evaluator/teacher role can access batch
+	return user.data?.is_system_manager || user.data?.is_lms_admin || user.data?.is_instructor || isModerator.value || isEvaluator.value || isStudent.value || user.data?.is_teacher
 })
 
 const canEditBatch = computed(() => {
-	// Teachers cannot edit batches - only Admin, Content Maker, Moderator, Evaluator can
-	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_instructor && !user.data?.is_moderator) {
+	// Teachers cannot edit batches - only Admin, LMS Admin, Content Maker, Moderator, Evaluator can
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_lms_admin && !user.data?.is_instructor && !user.data?.is_moderator) {
 		return false
 	}
-	return user.data?.is_system_manager || user.data?.is_instructor || isModerator.value || isEvaluator.value
+	return user.data?.is_system_manager || user.data?.is_lms_admin || user.data?.is_instructor || isModerator.value || isEvaluator.value
 })
 </script>

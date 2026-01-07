@@ -153,9 +153,9 @@ const showForm = ref(false)
 const title = ref('')
 
 onMounted(() => {
-	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
+	if (!user.data?.is_system_manager && !user.data?.is_lms_admin && !user.data?.is_moderator && !user.data?.is_instructor) {
 		router.push({ name: 'Courses' })
-	} else if (!user.data?.is_system_manager && !user.data?.is_moderator) {
+	} else if (!user.data?.is_system_manager && !user.data?.is_lms_admin && !user.data?.is_moderator) {
 		quizFilters.value['owner'] = user.data?.name
 	}
 	if (route.query.new === 'true') {

@@ -142,7 +142,7 @@
 						</div>
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 							<div
-								v-if="user.data?.is_moderator"
+								v-if="user.data?.is_moderator || user.data?.is_lms_admin || user.data?.is_system_manager"
 								class="flex flex-col space-y-5"
 							>
 								<FormControl
@@ -410,14 +410,14 @@ const meta = reactive({
 
 onMounted(() => {
 	// Teachers (LMS Teacher role) cannot create or edit courses UNLESS they also have admin roles
-	// System Managers, Course Creators, and Moderators can create/edit courses
-	// Block only if teacher AND (NOT system_manager AND NOT moderator AND NOT instructor)
-	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
+	// System Managers, Course Creators, Moderators, and LMS Admins can create/edit courses
+	// Block only if teacher AND (NOT system_manager AND NOT moderator AND NOT instructor AND NOT lms_admin)
+	if (user.data?.is_teacher && !user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor && !user.data?.is_lms_admin) {
 		router.push({ name: 'Courses' })
 		return
 	}
 	// Block if user has NONE of the required roles
-	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
+	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor && !user.data?.is_lms_admin) {
 		router.push({ name: 'Courses' })
 		return
 	}
@@ -673,7 +673,7 @@ const removeImage = () => {
 
 const check_permission = () => {
 	let user_is_instructor = false
-	if (user.data?.is_moderator) return
+	if (user.data?.is_moderator || user.data?.is_lms_admin || user.data?.is_system_manager) return
 
 	instructors.value.forEach((instructor) => {
 		if (!user_is_instructor && instructor == user.data?.name) {
