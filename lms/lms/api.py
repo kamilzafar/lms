@@ -3104,7 +3104,6 @@ def _handle_recording_event(payload):
 		# Update live class with recording info
 		live_class.recording_url = recording_url
 		live_class.recording_password = password
-		live_class.recording_available = 1
 
 		# Also update UUID if not set
 		if not live_class.uuid and meeting_uuid:
@@ -3115,17 +3114,68 @@ def _handle_recording_event(payload):
 
 		frappe.logger().info(f"[Zoom Webhook] Successfully updated recording for {live_class.name}")
 
-		# Create lesson from recording
+		# Check if Vimeo is configured and trigger upload
+		vimeo_upload_triggered = False
 		try:
-			create_lesson_from_recording(live_class.name)
-			frappe.logger().info(f"[Zoom Webhook] Created lesson from recording for {live_class.name}")
+			vimeo_settings = _get_vimeo_settings()
+			if vimeo_settings and vimeo_settings.enabled:
+				frappe.logger().info(f"[Zoom Webhook] Vimeo is enabled, triggering upload for {live_class.name}")
+
+				# Get download URL for Vimeo pull upload
+				download_url = _get_zoom_download_url(recording_url)
+
+				if download_url:
+					# Queue the Vimeo upload (async to not block webhook response)
+					frappe.enqueue(
+						'lms.lms.api._upload_to_vimeo',
+						download_url=download_url,
+						live_class_name=live_class.name,
+						queue='long',
+						timeout=600
+					)
+
+					# Update status
+					live_class.reload()
+					live_class.vimeo_status = "pending"
+					live_class.save(ignore_permissions=True)
+					frappe.db.commit()
+
+					vimeo_upload_triggered = True
+					frappe.logger().info(f"[Zoom Webhook] Vimeo upload queued for {live_class.name}")
+				else:
+					frappe.logger().warning(f"[Zoom Webhook] Could not get download URL for Vimeo upload")
+			else:
+				frappe.logger().info(f"[Zoom Webhook] Vimeo not configured, using Zoom recording directly")
+				# Mark recording as available for direct Zoom playback
+				live_class.reload()
+				live_class.recording_available = 1
+				live_class.save(ignore_permissions=True)
+				frappe.db.commit()
+
+				# Create lesson from recording (only if not using Vimeo)
+				try:
+					create_lesson_from_recording(live_class.name)
+					frappe.logger().info(f"[Zoom Webhook] Created lesson from recording for {live_class.name}")
+				except Exception as e:
+					frappe.logger().error(f"[Zoom Webhook] Error creating lesson: {str(e)}")
+
 		except Exception as e:
-			frappe.logger().error(f"[Zoom Webhook] Error creating lesson: {str(e)}")
+			frappe.logger().error(f"[Zoom Webhook] Error checking/triggering Vimeo upload: {str(e)}")
+			# Fallback: mark recording available for Zoom playback
+			try:
+				live_class.reload()
+				live_class.recording_available = 1
+				live_class.save(ignore_permissions=True)
+				frappe.db.commit()
+				create_lesson_from_recording(live_class.name)
+			except:
+				pass
 
 		return {
 			"status": "success",
 			"message": f"Recording updated for {live_class.name}",
-			"live_class": live_class.name
+			"live_class": live_class.name,
+			"vimeo_upload_triggered": vimeo_upload_triggered
 		}
 
 	except Exception as e:
@@ -3624,4 +3674,842 @@ def get_zoom_recording_logs(live_class_name=None, limit=50):
 			}
 			for log in logs
 		]
+	}
+
+
+# ============================================================================
+# VIMEO INTEGRATION
+# ============================================================================
+
+def _get_vimeo_settings():
+	"""Get the first enabled Vimeo settings document"""
+	from lms.lms.doctype.lms_vimeo_settings.lms_vimeo_settings import get_vimeo_settings
+	return get_vimeo_settings()
+
+
+def _vimeo_request(method, endpoint, data=None, timeout=30):
+	"""
+	Make an authenticated request to Vimeo API.
+
+	Args:
+		method: HTTP method (GET, POST, PATCH, DELETE)
+		endpoint: API endpoint (e.g., /me/videos, /videos/123456789)
+		data: Request body data (dict)
+		timeout: Request timeout in seconds
+
+	Returns:
+		Response data or raises exception
+	"""
+	settings = _get_vimeo_settings()
+	if not settings:
+		frappe.throw(_("Vimeo is not configured. Please set up Vimeo Settings."))
+
+	access_token = settings.get_password("access_token", raise_exception=False)
+	if not access_token:
+		frappe.throw(_("Vimeo access token is missing."))
+
+	headers = {
+		"Authorization": f"Bearer {access_token}",
+		"Content-Type": "application/json",
+		"Accept": "application/vnd.vimeo.*+json;version=3.4"
+	}
+
+	url = f"https://api.vimeo.com{endpoint}"
+
+	try:
+		if method.upper() == "GET":
+			response = requests.get(url, headers=headers, timeout=timeout)
+		elif method.upper() == "POST":
+			response = requests.post(url, headers=headers, json=data, timeout=timeout)
+		elif method.upper() == "PATCH":
+			response = requests.patch(url, headers=headers, json=data, timeout=timeout)
+		elif method.upper() == "DELETE":
+			response = requests.delete(url, headers=headers, timeout=timeout)
+		else:
+			frappe.throw(_(f"Unsupported HTTP method: {method}"))
+
+		frappe.logger().info(f"[Vimeo API] {method} {endpoint} - Status: {response.status_code}")
+
+		return {
+			"status_code": response.status_code,
+			"data": response.json() if response.text else {},
+			"success": 200 <= response.status_code < 300
+		}
+
+	except requests.exceptions.Timeout:
+		frappe.logger().error(f"[Vimeo API] Timeout for {method} {endpoint}")
+		raise
+	except requests.exceptions.RequestException as e:
+		frappe.logger().error(f"[Vimeo API] Request error: {str(e)}")
+		raise
+
+
+def _upload_to_vimeo(download_url, live_class_name, title=None, description=None):
+	"""
+	Upload a video to Vimeo using pull upload approach.
+	Vimeo will fetch the video from the provided URL.
+
+	Args:
+		download_url: Public URL to download the video from (Zoom recording URL)
+		live_class_name: Name of the LMS Live Class
+		title: Video title (optional, uses live class title if not provided)
+		description: Video description (optional)
+
+	Returns:
+		dict with vimeo_video_uri on success
+	"""
+	try:
+		live_class = frappe.get_doc("LMS Live Class", live_class_name)
+
+		# Prepare video metadata
+		video_title = title or live_class.title or f"Recording - {live_class.date}"
+		video_description = description or live_class.description or ""
+
+		# Add metadata to description
+		video_description += f"\n\nLMS Live Class: {live_class_name}"
+		if live_class.batch_name:
+			video_description += f"\nBatch: {live_class.batch_name}"
+		video_description += f"\nDate: {live_class.date}"
+
+		# Get Vimeo settings for privacy configuration
+		settings = _get_vimeo_settings()
+		if not settings:
+			raise Exception("Vimeo settings not configured")
+
+		# Prepare upload request body
+		upload_data = {
+			"upload": {
+				"approach": "pull",
+				"link": download_url
+			},
+			"name": video_title[:128],  # Vimeo title limit
+			"description": video_description[:5000],  # Vimeo description limit
+			"privacy": {
+				"view": settings.default_privacy or "unlisted",
+				"embed": "public",  # Allow embedding (domain restriction needs Standard+)
+				"download": not settings.disable_download,
+				"comments": "nobody"
+			},
+			"embed": {
+				"buttons": {
+					"share": False,
+					"embed": False,
+					"like": False,
+					"watchlater": False
+				},
+				"title": {
+					"name": "hide",
+					"owner": "hide",
+					"portrait": "hide"
+				},
+				"logos": {
+					"vimeo": False
+				},
+				"playbar": True
+			}
+		}
+
+		frappe.logger().info(f"[Vimeo Upload] Starting pull upload for {live_class_name}")
+		frappe.logger().info(f"[Vimeo Upload] Source URL: {download_url[:100]}...")
+
+		# Make the upload request
+		result = _vimeo_request("POST", "/me/videos", data=upload_data, timeout=60)
+
+		if result["success"]:
+			video_data = result["data"]
+			video_uri = video_data.get("uri", "")
+
+			frappe.logger().info(f"[Vimeo Upload] Success! Video URI: {video_uri}")
+
+			# Update live class with Vimeo info
+			live_class.vimeo_video_uri = video_uri
+			live_class.vimeo_status = "uploading"
+			live_class.vimeo_upload_date = frappe.utils.now()
+			live_class.vimeo_error = ""
+			live_class.save(ignore_permissions=True)
+			frappe.db.commit()
+
+			return {
+				"success": True,
+				"vimeo_video_uri": video_uri,
+				"message": "Video upload initiated"
+			}
+		else:
+			error_msg = result["data"].get("error", "Unknown error")
+			frappe.logger().error(f"[Vimeo Upload] Failed: {error_msg}")
+
+			# Update live class with error
+			live_class.vimeo_status = "error"
+			live_class.vimeo_error = str(error_msg)[:500]
+			live_class.save(ignore_permissions=True)
+			frappe.db.commit()
+
+			return {
+				"success": False,
+				"error": error_msg
+			}
+
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo Upload] Exception: {str(e)}")
+		frappe.log_error(title="Vimeo Upload Error", message=frappe.get_traceback())
+
+		try:
+			live_class = frappe.get_doc("LMS Live Class", live_class_name)
+			live_class.vimeo_status = "error"
+			live_class.vimeo_error = str(e)[:500]
+			live_class.save(ignore_permissions=True)
+			frappe.db.commit()
+		except:
+			pass
+
+		return {
+			"success": False,
+			"error": str(e)
+		}
+
+
+def _check_vimeo_video_status(video_uri):
+	"""
+	Check the transcoding status of a Vimeo video.
+
+	Args:
+		video_uri: Vimeo video URI (e.g., /videos/123456789)
+
+	Returns:
+		dict with status info
+	"""
+	try:
+		result = _vimeo_request("GET", video_uri)
+
+		if result["success"]:
+			video_data = result["data"]
+			transcode_status = video_data.get("transcode", {}).get("status", "")
+			upload_status = video_data.get("upload", {}).get("status", "")
+
+			frappe.logger().info(f"[Vimeo Status] {video_uri}: transcode={transcode_status}, upload={upload_status}")
+
+			# Determine overall status
+			if transcode_status == "complete":
+				status = "complete"
+			elif transcode_status == "in_progress" or upload_status == "in_progress":
+				status = "transcoding"
+			elif transcode_status == "error" or upload_status == "error":
+				status = "error"
+			else:
+				status = "uploading"
+
+			return {
+				"success": True,
+				"status": status,
+				"transcode_status": transcode_status,
+				"upload_status": upload_status,
+				"duration": video_data.get("duration"),
+				"width": video_data.get("width"),
+				"height": video_data.get("height"),
+				"link": video_data.get("link"),
+				"player_embed_url": video_data.get("player_embed_url")
+			}
+		else:
+			return {
+				"success": False,
+				"error": result["data"].get("error", "Unknown error")
+			}
+
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo Status] Error checking {video_uri}: {str(e)}")
+		return {
+			"success": False,
+			"error": str(e)
+		}
+
+
+def _set_vimeo_privacy(video_uri):
+	"""
+	Set privacy settings on a Vimeo video after transcoding completes.
+
+	Args:
+		video_uri: Vimeo video URI (e.g., /videos/123456789)
+	"""
+	try:
+		settings = _get_vimeo_settings()
+		if not settings:
+			return {"success": False, "error": "Vimeo settings not found"}
+
+		# Prepare privacy settings
+		privacy_data = {
+			"privacy": {
+				"view": settings.default_privacy or "unlisted",
+				"embed": "public",
+				"download": not settings.disable_download,
+				"comments": "nobody"
+			},
+			"embed": {
+				"buttons": {
+					"share": False,
+					"embed": False,
+					"like": False,
+					"watchlater": False
+				}
+			}
+		}
+
+		# Set allowed domains if configured (requires Standard+ plan)
+		if settings.allowed_domains:
+			domains = [d.strip() for d in settings.allowed_domains.split(",") if d.strip()]
+			if domains:
+				privacy_data["privacy"]["embed"] = "whitelist"
+				# Note: Domain whitelist is set separately via /videos/{id}/privacy/domains endpoint
+
+		result = _vimeo_request("PATCH", video_uri, data=privacy_data)
+
+		if result["success"]:
+			frappe.logger().info(f"[Vimeo Privacy] Updated privacy for {video_uri}")
+
+			# Try to set domain whitelist if configured
+			if settings.allowed_domains:
+				domains = [d.strip() for d in settings.allowed_domains.split(",") if d.strip()]
+				for domain in domains:
+					try:
+						domain_result = _vimeo_request(
+							"PUT",
+							f"{video_uri}/privacy/domains/{domain}",
+							timeout=10
+						)
+						if domain_result["success"]:
+							frappe.logger().info(f"[Vimeo Privacy] Added domain whitelist: {domain}")
+						else:
+							frappe.logger().warning(f"[Vimeo Privacy] Could not add domain {domain} (may require Standard+ plan)")
+					except Exception as e:
+						frappe.logger().warning(f"[Vimeo Privacy] Domain whitelist error: {str(e)}")
+
+			return {"success": True}
+		else:
+			return {"success": False, "error": result["data"].get("error", "Unknown error")}
+
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo Privacy] Error: {str(e)}")
+		return {"success": False, "error": str(e)}
+
+
+def check_vimeo_transcoding():
+	"""
+	Scheduled job to check transcoding status of pending Vimeo uploads.
+	Runs every 5 minutes via hooks.py.
+	"""
+	frappe.logger().info("[Vimeo Transcoding] Starting transcoding check job")
+
+	# Get all live classes with pending Vimeo uploads
+	pending_uploads = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"vimeo_video_uri": ["is", "set"],
+			"vimeo_status": ["in", ["uploading", "transcoding", "pending"]]
+		},
+		fields=["name", "title", "vimeo_video_uri", "vimeo_status", "vimeo_upload_date"]
+	)
+
+	frappe.logger().info(f"[Vimeo Transcoding] Found {len(pending_uploads)} pending uploads")
+
+	for upload in pending_uploads:
+		try:
+			frappe.logger().info(f"[Vimeo Transcoding] Checking {upload.name}: {upload.vimeo_video_uri}")
+
+			# Check status
+			status_result = _check_vimeo_video_status(upload.vimeo_video_uri)
+
+			if not status_result["success"]:
+				frappe.logger().warning(f"[Vimeo Transcoding] Could not check status for {upload.name}: {status_result.get('error')}")
+				continue
+
+			new_status = status_result["status"]
+			frappe.logger().info(f"[Vimeo Transcoding] {upload.name} status: {new_status}")
+
+			# Update live class
+			live_class = frappe.get_doc("LMS Live Class", upload.name)
+
+			if new_status == "complete":
+				# Transcoding complete - set privacy and mark available
+				frappe.logger().info(f"[Vimeo Transcoding] {upload.name} transcoding complete!")
+
+				# Set privacy settings
+				_set_vimeo_privacy(upload.vimeo_video_uri)
+
+				# Update live class
+				live_class.vimeo_status = "complete"
+				live_class.recording_available = 1
+				live_class.vimeo_error = ""
+				live_class.save(ignore_permissions=True)
+
+				# Create lesson from recording
+				try:
+					create_lesson_from_recording(upload.name)
+					frappe.logger().info(f"[Vimeo Transcoding] Created lesson for {upload.name}")
+				except Exception as e:
+					frappe.logger().error(f"[Vimeo Transcoding] Error creating lesson: {str(e)}")
+
+			elif new_status == "error":
+				live_class.vimeo_status = "error"
+				live_class.vimeo_error = status_result.get("error", "Transcoding failed")[:500]
+				live_class.save(ignore_permissions=True)
+				frappe.logger().error(f"[Vimeo Transcoding] {upload.name} transcoding failed")
+
+			elif new_status != upload.vimeo_status:
+				# Status changed but not complete
+				live_class.vimeo_status = new_status
+				live_class.save(ignore_permissions=True)
+
+			frappe.db.commit()
+
+		except Exception as e:
+			frappe.logger().error(f"[Vimeo Transcoding] Error processing {upload.name}: {str(e)}")
+			frappe.log_error(title="Vimeo Transcoding Error", message=frappe.get_traceback())
+
+	frappe.logger().info("[Vimeo Transcoding] Job completed")
+
+
+@frappe.whitelist()
+@frappe.rate_limit(limit=10, seconds=60)
+def get_vimeo_embed_url(live_class):
+	"""
+	Get Vimeo embed URL for a recording.
+	Validates user access before returning embed information.
+
+	Args:
+		live_class: Name of the LMS Live Class
+
+	Returns:
+		dict with embed_url and video info
+	"""
+	if frappe.session.user == "Guest":
+		frappe.throw(_("Please login to view recordings"))
+
+	try:
+		live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+	except frappe.DoesNotExistError:
+		frappe.logger().error(f"[Vimeo Embed] Live class not found: {live_class}")
+		frappe.throw(_("Live class not found"))
+
+	# Check if user has access (same logic as Zoom recording)
+	user_roles = frappe.get_roles(frappe.session.user)
+	is_privileged = any(role in user_roles for role in ["System Manager", "LMS Admin", "Moderator", "Course Creator"])
+
+	if not is_privileged:
+		has_access = False
+		access_reason = ""
+
+		# Check batch enrollment
+		if live_class_doc.batch_name:
+			enrolled_batches = frappe.get_all(
+				"LMS Batch Enrollment",
+				{"member": frappe.session.user},
+				pluck="batch"
+			)
+			if live_class_doc.batch_name in enrolled_batches:
+				has_access = True
+				access_reason = f"batch enrollment in {live_class_doc.batch_name}"
+
+		# Check course enrollment
+		if not has_access and live_class_doc.batch_name:
+			try:
+				batch_courses = frappe.get_all(
+					"Batch Course",
+					{"parent": live_class_doc.batch_name},
+					pluck="course"
+				)
+				if batch_courses:
+					enrolled_courses = frappe.get_all(
+						"LMS Enrollment",
+						{"member": frappe.session.user},
+						pluck="course"
+					)
+					for course in batch_courses:
+						if course in enrolled_courses:
+							has_access = True
+							access_reason = f"course enrollment in {course}"
+							break
+			except Exception as e:
+				frappe.logger().warning(f"[Vimeo Embed] Error checking enrollment: {str(e)}")
+
+		# Check instructor status
+		if not has_access and live_class_doc.batch_name:
+			try:
+				batch_courses = frappe.get_all(
+					"Batch Course",
+					{"parent": live_class_doc.batch_name},
+					pluck="course"
+				)
+				if batch_courses:
+					instructor_courses = frappe.get_all(
+						"Course Instructor",
+						{"instructor": frappe.session.user},
+						pluck="parent"
+					)
+					for course in batch_courses:
+						if course in instructor_courses:
+							has_access = True
+							access_reason = f"instructor of {course}"
+							break
+			except Exception as e:
+				frappe.logger().warning(f"[Vimeo Embed] Error checking instructor: {str(e)}")
+
+		if not has_access:
+			frappe.logger().warning(f"[Vimeo Embed] Access denied for {frappe.session.user} to {live_class}")
+			frappe.throw(_("You don't have access to this recording"))
+		else:
+			frappe.logger().info(f"[Vimeo Embed] Access granted for {frappe.session.user} via {access_reason}")
+
+	# Check if Vimeo recording is available
+	if not live_class_doc.vimeo_video_uri:
+		# Check if still processing
+		if live_class_doc.vimeo_status in ["uploading", "transcoding", "pending"]:
+			return {
+				"embed_url": None,
+				"recording_available": False,
+				"status": "processing",
+				"vimeo_status": live_class_doc.vimeo_status,
+				"message": _("Recording is being processed. Please check back in a few minutes."),
+				"title": live_class_doc.title,
+				"description": live_class_doc.description
+			}
+		elif live_class_doc.vimeo_status == "error":
+			return {
+				"embed_url": None,
+				"recording_available": False,
+				"status": "error",
+				"vimeo_status": live_class_doc.vimeo_status,
+				"message": live_class_doc.vimeo_error or _("Recording upload failed."),
+				"title": live_class_doc.title,
+				"description": live_class_doc.description
+			}
+		else:
+			return {
+				"embed_url": None,
+				"recording_available": False,
+				"status": "not_available",
+				"message": _("Recording not available."),
+				"title": live_class_doc.title,
+				"description": live_class_doc.description
+			}
+
+	if live_class_doc.vimeo_status != "complete":
+		return {
+			"embed_url": None,
+			"recording_available": False,
+			"status": "processing",
+			"vimeo_status": live_class_doc.vimeo_status,
+			"message": _("Recording is being processed. Please check back in a few minutes."),
+			"title": live_class_doc.title,
+			"description": live_class_doc.description
+		}
+
+	# Get Vimeo video ID from URI
+	video_id = live_class_doc.vimeo_video_uri.replace("/videos/", "")
+
+	# Log access
+	_log_recording_access(live_class_doc.name, "vimeo_request", frappe.session.user)
+
+	# Build embed URL with security parameters
+	embed_url = f"https://player.vimeo.com/video/{video_id}"
+	embed_params = [
+		"dnt=1",  # Do not track
+		"title=0",  # Hide title
+		"byline=0",  # Hide byline
+		"portrait=0",  # Hide portrait
+		"badge=0",  # Hide Vimeo badge
+		"autopause=0",
+		"player_id=0",
+		"app_id=58479"
+	]
+	embed_url += "?" + "&".join(embed_params)
+
+	frappe.logger().info(f"[Vimeo Embed] Returning embed URL for {live_class}")
+
+	return {
+		"embed_url": embed_url,
+		"vimeo_video_id": video_id,
+		"recording_available": True,
+		"status": "complete",
+		"title": live_class_doc.title,
+		"description": live_class_doc.description,
+		"duration": live_class_doc.duration
+	}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def vimeo_webhook():
+	"""
+	Handle Vimeo webhook events for transcoding notifications.
+
+	Supported events:
+	- video.upload.complete: When upload finishes
+	- video.transcode.complete: When transcoding finishes
+	"""
+	import hashlib
+	import hmac
+
+	frappe.flags.ignore_csrf = True
+
+	try:
+		if not frappe.request.data:
+			frappe.logger().error("[Vimeo Webhook] No request data received")
+			return {"status": "error", "message": "No data received"}
+
+		payload = json.loads(frappe.request.data)
+
+		event_type = payload.get("event", "")
+		video_uri = payload.get("video", {}).get("uri", "")
+
+		frappe.logger().info(f"[Vimeo Webhook] Received event: {event_type} for {video_uri}")
+
+		if not video_uri:
+			return {"status": "success", "message": "No video URI in payload"}
+
+		# Find matching live class
+		live_class_name = frappe.db.get_value(
+			"LMS Live Class",
+			{"vimeo_video_uri": video_uri},
+			"name"
+		)
+
+		if not live_class_name:
+			frappe.logger().warning(f"[Vimeo Webhook] No matching live class for {video_uri}")
+			return {"status": "success", "message": "No matching live class"}
+
+		live_class = frappe.get_doc("LMS Live Class", live_class_name)
+
+		if event_type == "video.upload.complete":
+			live_class.vimeo_status = "transcoding"
+			live_class.save(ignore_permissions=True)
+			frappe.logger().info(f"[Vimeo Webhook] {live_class_name} upload complete, now transcoding")
+
+		elif event_type == "video.transcode.complete":
+			# Set privacy settings
+			_set_vimeo_privacy(video_uri)
+
+			# Mark as complete
+			live_class.vimeo_status = "complete"
+			live_class.recording_available = 1
+			live_class.vimeo_error = ""
+			live_class.save(ignore_permissions=True)
+
+			# Create lesson
+			try:
+				create_lesson_from_recording(live_class_name)
+			except Exception as e:
+				frappe.logger().error(f"[Vimeo Webhook] Error creating lesson: {str(e)}")
+
+			frappe.logger().info(f"[Vimeo Webhook] {live_class_name} transcoding complete!")
+
+		frappe.db.commit()
+		return {"status": "success", "message": f"Event {event_type} processed"}
+
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo Webhook] Error: {str(e)}")
+		frappe.log_error(title="Vimeo Webhook Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist()
+def vimeo_diagnostics():
+	"""
+	Comprehensive diagnostics for Vimeo integration.
+	Returns status of configuration and recent uploads.
+	"""
+	if not frappe.has_permission("LMS Live Class", "read"):
+		frappe.throw(_("Permission denied"))
+
+	# Get Vimeo settings status
+	settings = _get_vimeo_settings()
+	settings_status = {
+		"configured": bool(settings),
+		"enabled": settings.enabled if settings else False,
+		"account_name": settings.account_name if settings else None,
+		"verification_status": settings.verification_status if settings else None,
+		"last_verified": str(settings.last_verified) if settings and settings.last_verified else None
+	}
+
+	# Get pending uploads
+	pending_uploads = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"vimeo_video_uri": ["is", "set"],
+			"vimeo_status": ["in", ["uploading", "transcoding", "pending"]]
+		},
+		fields=["name", "title", "vimeo_video_uri", "vimeo_status", "vimeo_upload_date"],
+		order_by="vimeo_upload_date desc",
+		limit=20
+	)
+
+	# Get recent completed uploads
+	completed_uploads = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"vimeo_video_uri": ["is", "set"],
+			"vimeo_status": "complete"
+		},
+		fields=["name", "title", "vimeo_video_uri", "vimeo_status", "vimeo_upload_date"],
+		order_by="vimeo_upload_date desc",
+		limit=10
+	)
+
+	# Get recent errors
+	error_uploads = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"vimeo_status": "error"
+		},
+		fields=["name", "title", "vimeo_error", "vimeo_upload_date"],
+		order_by="modified desc",
+		limit=10
+	)
+
+	return {
+		"timestamp": frappe.utils.now(),
+		"settings": settings_status,
+		"pending_uploads": pending_uploads,
+		"completed_uploads": completed_uploads,
+		"error_uploads": error_uploads,
+		"webhook_url": f"{frappe.utils.get_url()}/api/method/lms.lms.api.vimeo_webhook"
+	}
+
+
+@frappe.whitelist()
+def test_vimeo_connection():
+	"""Test Vimeo API connection and return account info."""
+	if not frappe.has_permission("LMS Vimeo Settings", "read"):
+		frappe.throw(_("Permission denied"))
+
+	try:
+		result = _vimeo_request("GET", "/me")
+
+		if result["success"]:
+			user_data = result["data"]
+			return {
+				"success": True,
+				"account_name": user_data.get("name"),
+				"account_uri": user_data.get("uri"),
+				"account_link": user_data.get("link"),
+				"upload_quota": user_data.get("upload_quota", {}),
+				"message": f"Connected as: {user_data.get('name')}"
+			}
+		else:
+			return {
+				"success": False,
+				"error": result["data"].get("error", "Unknown error")
+			}
+	except Exception as e:
+		return {
+			"success": False,
+			"error": str(e)
+		}
+
+
+@frappe.whitelist()
+def manual_vimeo_upload(live_class_name):
+	"""
+	Manually trigger Vimeo upload for a live class.
+	Useful for retrying failed uploads or uploading recordings that weren't auto-uploaded.
+	"""
+	if not frappe.has_permission("LMS Live Class", "write"):
+		frappe.throw(_("Permission denied"))
+
+	live_class = frappe.get_doc("LMS Live Class", live_class_name)
+
+	if not live_class.recording_url:
+		frappe.throw(_("No Zoom recording URL available for this live class"))
+
+	if live_class.vimeo_status == "complete":
+		frappe.throw(_("Recording already uploaded to Vimeo"))
+
+	# Get download URL from recording_url
+	download_url = _get_zoom_download_url(live_class.recording_url)
+
+	if not download_url:
+		frappe.throw(_("Could not extract download URL from recording"))
+
+	# Queue the upload
+	frappe.enqueue(
+		'lms.lms.api._upload_to_vimeo',
+		download_url=download_url,
+		live_class_name=live_class_name,
+		queue='long',
+		timeout=600
+	)
+
+	# Update status
+	live_class.vimeo_status = "pending"
+	live_class.vimeo_error = ""
+	live_class.save(ignore_permissions=True)
+
+	return {
+		"success": True,
+		"message": "Vimeo upload queued successfully"
+	}
+
+
+def _get_zoom_download_url(recording_url):
+	"""
+	Extract or convert a Zoom recording URL to a download URL.
+	Zoom play URLs need to be converted to download URLs for Vimeo pull upload.
+	"""
+	if not recording_url:
+		return None
+
+	# If it's already a download URL, return as-is
+	if "download" in recording_url.lower():
+		return recording_url
+
+	# Try to convert play_url to download_url
+	# Zoom URLs typically look like: https://zoom.us/rec/play/xxx or https://zoom.us/rec/share/xxx
+	# Download URLs look like: https://zoom.us/rec/download/xxx
+
+	download_url = recording_url
+
+	# Replace play with download
+	if "/rec/play/" in download_url:
+		download_url = download_url.replace("/rec/play/", "/rec/download/")
+	elif "/rec/share/" in download_url:
+		download_url = download_url.replace("/rec/share/", "/rec/download/")
+
+	return download_url
+
+
+@frappe.whitelist()
+def get_recording_type(live_class):
+	"""
+	Check which recording type to use for a live class.
+	Returns information about whether Vimeo or Zoom should be used.
+
+	Args:
+		live_class: Name of the LMS Live Class
+
+	Returns:
+		dict with recording type information
+	"""
+	if frappe.session.user == "Guest":
+		frappe.throw(_("Please login to view recordings"))
+
+	try:
+		live_class_doc = frappe.get_doc("LMS Live Class", live_class)
+	except frappe.DoesNotExistError:
+		return {
+			"has_vimeo": False,
+			"has_zoom": False,
+			"vimeo_status": None,
+			"recording_available": False
+		}
+
+	# Check if Vimeo video exists
+	has_vimeo = bool(live_class_doc.vimeo_video_uri)
+	vimeo_status = live_class_doc.vimeo_status if has_vimeo else None
+
+	# Check if Zoom recording exists
+	has_zoom = bool(live_class_doc.recording_url)
+
+	return {
+		"has_vimeo": has_vimeo,
+		"has_zoom": has_zoom,
+		"vimeo_status": vimeo_status,
+		"recording_available": live_class_doc.recording_available,
+		"use_vimeo": has_vimeo and vimeo_status in ["complete", "uploading", "transcoding", "pending"]
 	}

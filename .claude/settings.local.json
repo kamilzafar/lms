@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(npm run build:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:developer.vimeo.com)",
+      "WebSearch",
+      "WebFetch(domain:moldstud.com)",
+      "WebFetch(domain:www.postman.com)",
+      "WebFetch(domain:phppot.com)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:vimeo.zendesk.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:help.vimeo.com)",
+      "WebFetch(domain:publicapi.dev)",
+      "Bash(mkdir:*)",
+      "Bash(python3:*)",
+      "Bash(grep:*)"
     ]
   }
 }

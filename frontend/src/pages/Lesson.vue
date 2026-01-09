@@ -256,8 +256,8 @@
 							v-else
 							class="ProseMirror prose prose-table:table-fixed prose-td:p-2 prose-th:p-2 prose-td:border prose-th:border prose-td:border-outline-gray-2 prose-th:border-outline-gray-2 prose-td:relative prose-th:relative prose-th:bg-surface-gray-2 prose-sm max-w-none !whitespace-normal mt-8"
 						>
-							<!-- Zoom Recording Embed for recording lessons -->
-							<ZoomRecordingEmbed
+							<!-- Recording Embed for recording lessons (auto-detects Vimeo or Zoom) -->
+							<RecordingEmbed
 								v-if="lesson.data?.content && lesson.data.content.startsWith('live_class:')"
 								:liveClassId="lesson.data.content.replace('live_class:', '')"
 							/>
@@ -386,7 +386,7 @@ import CourseOutline from '@/components/CourseOutline.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import Notes from '@/components/Notes/Notes.vue'
 import InlineLessonMenu from '@/components/Notes/InlineLessonMenu.vue'
-import ZoomRecordingEmbed from '@/components/ZoomRecordingEmbed.vue'
+import RecordingEmbed from '@/components/RecordingEmbed.vue'
 
 const user = inject('$user')
 const socket = inject('$socket')
