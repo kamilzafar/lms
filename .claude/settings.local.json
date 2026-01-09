@@ -2,6 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(npm run build:*)",
+<<<<<<< HEAD
       "Bash(python:*)",
 <<<<<<< HEAD
       "WebFetch(domain:developer.vimeo.com)",
@@ -27,6 +28,9 @@
       "Bash(npm install:*)",
       "Bash(test:*)"
 >>>>>>> 0f1cd2237e3759b13d54e9782b20960960f8ba39
+=======
+      "Bash(python:*)"
+>>>>>>> parent of 0f1cd223 (all MD Files)
     ]
   }
 }
