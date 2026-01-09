@@ -8,7 +8,7 @@
 			:class="sidebarStore.isSidebarCollapsed ? 'items-center' : ''"
 		>
 			<UserDropdown :isCollapsed="sidebarStore.isSidebarCollapsed" />
-			<div class="flex flex-col" v-if="sidebarSettings.data">
+			<div class="flex flex-col" v-if="sidebarLinks">
 				<div v-for="link in sidebarLinks" class="mx-2 my-2.5">
 					<div
 						v-if="!link.hideLabel"
@@ -265,28 +265,65 @@ const iconProps = {
 	height: 16,
 }
 
-onMounted(() => {
-	setUpOnboarding()
+onMounted(async () => {
 	addKeyboardShortcut()
 	socket.on('publish_lms_notifications', (data) => {
 		unreadNotifications.reload()
 	})
+	// Initialize sidebar
+	await initializeSidebar()
 })
+
+const initializeSidebar = async () => {
+	try {
+		// Wait for user data if not already loaded
+		if (!userResource.data) {
+			await userResource.promise
+		}
+
+		if (userResource.data) {
+			isModerator.value = userResource.data.is_moderator
+			isInstructor.value = userResource.data.is_instructor
+
+			// Try to load programs, but don't fail if it errors
+			try {
+				await programs.reload()
+			} catch (err) {
+				console.warn('Failed to load programs:', err)
+			}
+
+			setUpOnboarding()
+			sidebarLinks.value = getSidebarLinks()
+			setSidebarLinks()
+		}
+	} catch (err) {
+		console.error('Failed to initialize sidebar:', err)
+		// Still try to show sidebar with basic items
+		sidebarLinks.value = getSidebarLinks()
+		setSidebarLinks()
+	}
+}
 
 const setSidebarLinks = () => {
 	sidebarSettings.reload(
 		{},
 		{
 			onSuccess(data) {
-				Object.keys(data).forEach((key) => {
-					if (!parseInt(data[key])) {
-						sidebarLinks.value.forEach((link) => {
-							link.items = link.items.filter(
-								(item) => item.label.toLowerCase().split(' ').join('_') !== key
-							)
-						})
-					}
-				})
+				if (data && sidebarLinks.value) {
+					Object.keys(data).forEach((key) => {
+						if (!parseInt(data[key])) {
+							sidebarLinks.value.forEach((link) => {
+								link.items = link.items.filter(
+									(item) => item.label.toLowerCase().split(' ').join('_') !== key
+								)
+							})
+						}
+					})
+				}
+			},
+			onError(err) {
+				console.error('Failed to load sidebar settings:', err)
+				// Sidebar will still show with default items even if settings fail to load
 			},
 		}
 	)
@@ -582,16 +619,10 @@ const setUpOnboarding = () => {
 	}
 }
 
+// Watch for user data changes and reinitialize sidebar if needed
 watch(userResource, async () => {
-	await userResource.promise
-	if (userResource.data) {
-		isModerator.value = userResource.data.is_moderator
-		isInstructor.value = userResource.data.is_instructor
-		await programs.reload()
-		setUpOnboarding()
-	}
-	sidebarLinks.value = getSidebarLinks()
-	setSidebarLinks()
+	// Re-initialize sidebar when user data changes (e.g., after login)
+	await initializeSidebar()
 })
 
 const redirectToWebsite = () => {
