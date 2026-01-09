@@ -177,7 +177,7 @@ const canCreateClass = () => {
 
 const canManageClass = () => {
 	// Admin, Content Maker (Course Creator), Moderator, and Evaluator can manage (create/edit/delete) live classes
-	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
+	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator || user.data?.is_lms_admin
 }
 
 const hasPermission = () => {

@@ -231,9 +231,9 @@ const liveClasses = createListResource({
 onMounted(() => {
 	// Set default tab based on user role
 	// Use is_student from API which checks for LMS Student role
-	const isAdmin = user.data?.is_system_manager
+	const isAdmin = user.data?.is_system_manager || user.data?.is_lms_admin
 	const isInstructorOrModerator = user.data &&
-		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator) &&
+		(user.data?.is_moderator || user.data?.is_instructor || user.data?.is_evaluator || user.data?.is_lms_admin) &&
 		!isAdmin
 	const isStudent = user.data?.is_student && !isAdmin
 	const isTeacher = user.data?.is_teacher && !isAdmin && !user.data?.is_moderator && !user.data?.is_instructor

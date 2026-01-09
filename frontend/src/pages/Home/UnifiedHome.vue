@@ -261,7 +261,8 @@ const canStartClass = () => {
 		user.data?.is_instructor ||
 		user.data?.is_moderator ||
 		user.data?.is_evaluator ||
-		user.data?.is_teacher
+		user.data?.is_teacher ||
+		user.data?.is_lms_admin
 	)
 }
 

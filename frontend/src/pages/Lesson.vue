@@ -854,7 +854,7 @@ const toggleInlineMenu = async () => {
 }
 
 const canSeeStats = () => {
-	if (user.data?.is_moderator || user.data?.is_instructor) return true
+	if (user.data?.is_moderator || user.data?.is_instructor || user.data?.is_lms_admin) return true
 	return false
 }
 
@@ -866,7 +866,8 @@ const canGoZen = () => {
 	if (
 		user.data?.is_moderator ||
 		user.data?.is_instructor ||
-		user.data?.is_evaluator
+		user.data?.is_evaluator ||
+		user.data?.is_lms_admin
 	)
 		return true
 	if (lesson.data?.membership) return true

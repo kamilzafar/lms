@@ -546,7 +546,8 @@ const isAdmin = () => {
 	return (
 		userResource?.data?.is_instructor ||
 		userResource?.data?.is_moderator ||
-		userResource.data?.is_evaluator
+		userResource?.data?.is_evaluator ||
+		userResource?.data?.is_lms_admin
 	)
 }
 
@@ -554,7 +555,7 @@ const checkIfCanAddProgram = () => {
 	const { userResource } = usersStore()
 	const { programs } = useSettings()
 	if (!userResource.data) return false
-	if (userResource?.data?.is_moderator || userResource?.data?.is_instructor) {
+	if (userResource?.data?.is_moderator || userResource?.data?.is_instructor || userResource?.data?.is_lms_admin) {
 		return true
 	}
 	return (

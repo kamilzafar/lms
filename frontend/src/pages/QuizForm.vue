@@ -255,7 +255,7 @@ const props = defineProps({
 const questions = ref([])
 
 onMounted(() => {
-	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor) {
+	if (!user.data?.is_system_manager && !user.data?.is_moderator && !user.data?.is_instructor && !user.data?.is_lms_admin) {
 		router.push({ name: 'Courses' })
 	}
 	if (props.quizID !== 'new') {

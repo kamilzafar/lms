@@ -166,6 +166,6 @@ const canSeeAddButton = () => {
 	if (readOnlyMode) {
 		return false
 	}
-	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator
+	return user.data?.is_system_manager || user.data?.is_instructor || user.data?.is_moderator || user.data?.is_evaluator || user.data?.is_lms_admin
 }
 </script>
