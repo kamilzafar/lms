@@ -130,9 +130,6 @@ scheduler_events = {
 	"cron": {
 		"*/10 * * * *": [
 			"lms.lms.doctype.lms_live_class.lms_live_class.fetch_pending_recordings",
-		],
-		"*/5 * * * *": [
-			"lms.lms.api.check_vimeo_transcoding",
 		]
 	},
 	"daily": [

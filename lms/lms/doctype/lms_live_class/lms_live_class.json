@@ -35,13 +35,7 @@
   "recording_available",
   "recording_url",
   "column_break_recording_pw",
-  "recording_password",
-  "section_break_vimeo",
-  "vimeo_video_uri",
-  "vimeo_status",
-  "column_break_vimeo",
-  "vimeo_error",
-  "vimeo_upload_date"
+  "recording_password"
  ],
  "fields": [
   {
@@ -181,7 +175,7 @@
   {
    "fieldname": "section_break_recording",
    "fieldtype": "Section Break",
-   "label": "Zoom Recording"
+   "label": "Recording"
   },
   {
    "default": "0",
@@ -193,9 +187,8 @@
   {
    "fieldname": "recording_url",
    "fieldtype": "Small Text",
-   "label": "Zoom Recording URL",
-   "read_only": 1,
-   "description": "Temporary Zoom recording URL (used for Vimeo upload)"
+   "label": "Recording URL",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_recording_pw",
@@ -206,45 +199,6 @@
    "fieldtype": "Password",
    "label": "Recording Password",
    "read_only": 1
-  },
-  {
-   "fieldname": "section_break_vimeo",
-   "fieldtype": "Section Break",
-   "label": "Vimeo Recording",
-   "description": "Recording is uploaded to Vimeo for secure, protected playback"
-  },
-  {
-   "fieldname": "vimeo_video_uri",
-   "fieldtype": "Data",
-   "label": "Vimeo Video URI",
-   "read_only": 1,
-   "description": "Vimeo video URI (e.g., /videos/123456789)"
-  },
-  {
-   "fieldname": "vimeo_status",
-   "fieldtype": "Select",
-   "label": "Vimeo Status",
-   "options": "\npending\nuploading\ntranscoding\ncomplete\nerror",
-   "read_only": 1,
-   "description": "Current status of Vimeo upload/transcoding"
-  },
-  {
-   "fieldname": "column_break_vimeo",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "vimeo_error",
-   "fieldtype": "Small Text",
-   "label": "Vimeo Error",
-   "read_only": 1,
-   "description": "Error message if Vimeo upload/transcoding failed"
-  },
-  {
-   "fieldname": "vimeo_upload_date",
-   "fieldtype": "Datetime",
-   "label": "Vimeo Upload Date",
-   "read_only": 1,
-   "description": "When the recording was uploaded to Vimeo"
   }
  ],
  "grid_page_length": 50,
@@ -256,8 +210,8 @@
    "link_fieldname": "live_class"
   }
  ],
- "modified": "2025-01-09 12:00:00.000000",
- "modified_by": "Administrator",
+ "modified": "2025-05-27 14:44:35.679712",
+ "modified_by": "sayali@frappe.io",
  "module": "LMS",
  "name": "LMS Live Class",
  "owner": "Administrator",
