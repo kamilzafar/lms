@@ -2507,29 +2507,62 @@ def get_recording_secure(token, live_class):
 	if not recording_url:
 		frappe.throw(_("Recording URL not found"))
 
-	# Handle password in URL if needed
-	# Note: Password should already be embedded at webhook stage, but add as fallback
-	embed_url = recording_url
-	frappe.logger().info(f"[Recording Secure] Processing URL - has_password={bool(password)}, pwd_in_url={'pwd=' in recording_url}, access_token_in_url={'access_token=' in recording_url}")
+	# Detect recording source (Zoom vs Vimeo)
+	is_vimeo = "vimeo.com" in recording_url.lower()
+	is_zoom = "zoom.us" in recording_url.lower()
 
-	# Only add password if:
-	# 1. We have a password
-	# 2. It's not already in the URL (from webhook)
-	# 3. There's no access_token (which bypasses password)
-	if password and "pwd=" not in recording_url and "password=" not in recording_url and "access_token=" not in recording_url:
+	embed_url = recording_url
+
+	# Normalize Vimeo URLs to player embed format
+	# Convert: https://vimeo.com/123456789 or https://vimeo.com/123456789?params
+	# To:      https://player.vimeo.com/video/123456789
+	if is_vimeo and "player.vimeo.com" not in recording_url.lower():
+		try:
+			import re
+			from urllib.parse import urlparse
+
+			# Extract video ID from various Vimeo URL formats
+			# Formats supported:
+			# - https://vimeo.com/123456789
+			# - https://vimeo.com/123456789?share=copy
+			# - https://www.vimeo.com/123456789
+			parsed = urlparse(recording_url)
+			path = parsed.path.strip('/')
+
+			# Extract numeric video ID
+			video_id_match = re.match(r'(\d+)', path)
+			if video_id_match:
+				video_id = video_id_match.group(1)
+				embed_url = f"https://player.vimeo.com/video/{video_id}"
+				frappe.logger().info(f"[Recording Secure] Normalized Vimeo URL: {recording_url} -> {embed_url}")
+			else:
+				frappe.logger().warning(f"[Recording Secure] Could not extract video ID from Vimeo URL: {recording_url}")
+		except Exception as e:
+			frappe.logger().error(f"[Recording Secure] Error normalizing Vimeo URL: {str(e)}")
+			# Keep original URL as fallback
+			embed_url = recording_url
+
+	frappe.logger().info(f"[Recording Secure] Processing URL - source={'vimeo' if is_vimeo else 'zoom' if is_zoom else 'unknown'}, has_password={bool(password)}, pwd_in_url={'pwd=' in recording_url}, access_token_in_url={'access_token=' in recording_url}")
+
+	# Handle password in URL if needed (ONLY for Zoom recordings)
+	# Vimeo doesn't use password parameters - skip for Vimeo URLs
+	# Note: Password should already be embedded at webhook stage for Zoom, but add as fallback
+	if is_zoom and password and "pwd=" not in recording_url and "password=" not in recording_url and "access_token=" not in recording_url:
 		try:
 			from urllib.parse import quote
 			# Add password to URL as fallback (should already be embedded from webhook)
 			separator = "&" if "?" in recording_url else "?"
 			embed_url = f"{recording_url}{separator}pwd={quote(password, safe='')}"
-			frappe.logger().info(f"[Recording Secure] Added password to URL (fallback from webhook)")
+			frappe.logger().info(f"[Recording Secure] Added password to Zoom URL (fallback from webhook)")
 		except Exception as e:
 			frappe.logger().error(f"[Recording Secure] Error adding password to URL: {str(e)}")
 			embed_url = recording_url
+	elif is_vimeo:
+		frappe.logger().info(f"[Recording Secure] Vimeo URL detected - skipping password parameters")
 	elif "pwd=" in recording_url or "access_token=" in recording_url:
 		frappe.logger().info(f"[Recording Secure] Password/token already embedded in URL from webhook")
-	else:
-		frappe.logger().warning(f"[Recording Secure] No password found in recording_password field for {live_class}")
+	elif not is_vimeo and not is_zoom:
+		frappe.logger().warning(f"[Recording Secure] Unknown recording source - URL: {recording_url[:100]}")
 
 	# Return HTML with embedded iframe (URL stays on backend)
 	# HTML-escape title to prevent XSS attacks
@@ -2557,7 +2590,15 @@ def get_recording_secure(token, live_class):
 	response.headers['X-Frame-Options'] = 'SAMEORIGIN'  # Allow embedding on same domain, CSP provides additional restrictions
 	response.headers['X-Content-Type-Options'] = 'nosniff'
 	response.headers['Referrer-Policy'] = 'no-referrer'
-	response.headers['Content-Security-Policy'] = "frame-ancestors 'self'; script-src 'unsafe-inline' https://zoom.us https://*.zoom.us; frame-src https://zoom.us https://*.zoom.us; style-src 'unsafe-inline' https://zoom.us https://*.zoom.us"
+
+	# CSP: Allow both Zoom and Vimeo domains for video embedding
+	response.headers['Content-Security-Policy'] = (
+		"frame-ancestors 'self'; "
+		"script-src 'unsafe-inline' https://zoom.us https://*.zoom.us https://player.vimeo.com https://*.vimeo.com; "
+		"frame-src https://zoom.us https://*.zoom.us https://player.vimeo.com https://*.vimeo.com; "
+		"style-src 'unsafe-inline' https://zoom.us https://*.zoom.us https://player.vimeo.com https://*.vimeo.com"
+	)
+
 	response.headers['Permissions-Policy'] = "autoplay=(self), encrypted-media=(self), fullscreen=(self), picture-in-picture=(self)"
 	return response
 
@@ -3263,6 +3304,412 @@ def zoom_webhook_status():
 		"message": "Zoom webhook endpoint is active",
 		"timestamp": frappe.utils.now()
 	}
+
+
+# ============================================================================
+# VIMEO URL UTILITIES
+# ============================================================================
+
+def normalize_vimeo_url(vimeo_url):
+	"""
+	Normalize Vimeo URL to player embed format.
+
+	Converts various Vimeo URL formats to embeddable player URL:
+	- https://vimeo.com/123456789 -> https://player.vimeo.com/video/123456789
+	- https://vimeo.com/123456789?share=copy -> https://player.vimeo.com/video/123456789
+	- https://www.vimeo.com/123456789 -> https://player.vimeo.com/video/123456789
+
+	Already normalized URLs are returned as-is:
+	- https://player.vimeo.com/video/123456789 -> https://player.vimeo.com/video/123456789
+
+	Args:
+		vimeo_url (str): Vimeo URL in any format
+
+	Returns:
+		str: Normalized player embed URL, or original URL if normalization fails
+	"""
+	if not vimeo_url or "vimeo.com" not in vimeo_url.lower():
+		return vimeo_url
+
+	# Already normalized - return as-is
+	if "player.vimeo.com" in vimeo_url.lower():
+		return vimeo_url
+
+	try:
+		import re
+		from urllib.parse import urlparse
+
+		parsed = urlparse(vimeo_url)
+		path = parsed.path.strip('/')
+
+		# Extract numeric video ID from path
+		# Supports: /123456789 or just 123456789
+		video_id_match = re.match(r'(\d+)', path)
+		if video_id_match:
+			video_id = video_id_match.group(1)
+			return f"https://player.vimeo.com/video/{video_id}"
+		else:
+			frappe.logger().warning(f"[Vimeo URL] Could not extract video ID from: {vimeo_url}")
+			return vimeo_url
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo URL] Error normalizing URL: {str(e)}")
+		return vimeo_url
+
+
+@frappe.whitelist()
+def fix_vimeo_urls():
+	"""
+	Utility to fix existing Vimeo URLs in database.
+	Converts all direct Vimeo links to player embed format.
+
+	Usage: Call from console or API
+	Returns: Count of updated records
+	"""
+	if not frappe.has_permission("LMS Live Class", "write"):
+		frappe.throw(_("Permission denied"))
+
+	# Find all Live Classes with Vimeo URLs
+	classes_with_vimeo = frappe.get_all(
+		"LMS Live Class",
+		filters={
+			"recording_url": ["like", "%vimeo.com%"]
+		},
+		fields=["name", "recording_url"]
+	)
+
+	updated_count = 0
+	for lc in classes_with_vimeo:
+		if not lc.recording_url:
+			continue
+
+		# Skip if already normalized
+		if "player.vimeo.com" in lc.recording_url.lower():
+			continue
+
+		# Normalize URL
+		normalized = normalize_vimeo_url(lc.recording_url)
+
+		if normalized != lc.recording_url:
+			frappe.db.set_value("LMS Live Class", lc.name, "recording_url", normalized)
+			frappe.logger().info(f"[Vimeo URL Fix] Updated {lc.name}: {lc.recording_url} -> {normalized}")
+			updated_count += 1
+
+	frappe.db.commit()
+
+	return {
+		"status": "success",
+		"total_vimeo_classes": len(classes_with_vimeo),
+		"updated_count": updated_count,
+		"message": f"Fixed {updated_count} Vimeo URLs"
+	}
+
+
+# ============================================================================
+# VIMEO WEBHOOK HANDLER
+# ============================================================================
+
+@frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
+def vimeo_webhook():
+	"""
+	Handle Vimeo webhook events for recording uploads.
+
+	Vimeo's Zoom app automatically uploads Zoom recordings to Vimeo.
+	When upload completes, Vimeo sends a webhook event.
+
+	This handler:
+	1. Receives the Vimeo webhook
+	2. Extracts the Vimeo video URL
+	3. Finds the matching LMS Live Class
+	4. Updates recording_url with Vimeo URL (replaces Zoom URL)
+	5. Creates lesson from recording
+
+	Webhook URL: /api/method/lms.lms.api.vimeo_webhook
+
+	Vimeo Webhook Events:
+	- video.upload.complete: When video upload finishes
+	- video.upload.success: Alternative event name
+	"""
+	# Bypass CSRF for webhook endpoints
+	frappe.flags.ignore_csrf = True
+
+	try:
+		# Get request data
+		payload = None
+		if frappe.request.data:
+			payload = json.loads(frappe.request.data)
+		elif frappe.form_dict:
+			payload = dict(frappe.form_dict)
+
+		if not payload:
+			frappe.logger().error("[Vimeo Webhook] No request data received")
+			return {"status": "error", "message": "No data received"}
+
+		frappe.logger().info(f"[Vimeo Webhook] Received payload: {json.dumps(payload, indent=2)}")
+
+		# Handle different Vimeo webhook formats
+		event_type = payload.get("event") or payload.get("type") or payload.get("action")
+
+		frappe.logger().info(f"[Vimeo Webhook] Event type: {event_type}")
+
+		# Handle Vimeo verification challenge (similar to Zoom)
+		if event_type == "verification" or event_type == "webhook_verification":
+			return _handle_vimeo_verification(payload)
+
+		# Handle video upload complete events
+		if event_type in ["video.upload.complete", "video.upload.success", "upload.complete", "upload"]:
+			return _handle_vimeo_upload_complete(payload)
+
+		# Acknowledge other events
+		frappe.logger().info(f"[Vimeo Webhook] Unhandled event type: {event_type}")
+		return {"status": "success", "message": f"Event {event_type} acknowledged"}
+
+	except json.JSONDecodeError as e:
+		frappe.logger().error(f"[Vimeo Webhook] JSON decode error: {str(e)}")
+		return {"status": "error", "message": f"Invalid JSON: {str(e)}"}
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo Webhook] Error processing webhook: {str(e)}")
+		frappe.log_error(title="Vimeo Webhook Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+def _handle_vimeo_verification(payload):
+	"""
+	Handle Vimeo webhook verification challenge.
+	Vimeo may send a verification request when setting up the webhook.
+	"""
+	challenge = payload.get("challenge") or payload.get("verification_token")
+
+	if challenge:
+		frappe.logger().info(f"[Vimeo Webhook] Verification challenge received: {challenge}")
+		return {"challenge": challenge}
+
+	frappe.logger().warning("[Vimeo Webhook] Verification request without challenge")
+	return {"status": "ok"}
+
+
+def _handle_vimeo_upload_complete(payload):
+	"""
+	Handle Vimeo video upload completion.
+
+	Vimeo webhook payload format (varies by configuration):
+	{
+		"event": "video.upload.complete",
+		"data": {
+			"name": "Zoom meeting title",
+			"uri": "/videos/123456789",
+			"link": "https://vimeo.com/123456789",
+			"player_embed_url": "https://player.vimeo.com/video/123456789",
+			"created_time": "2026-01-11T10:30:00+00:00",
+			"description": "...",
+			"duration": 3600
+		}
+	}
+	"""
+	try:
+		# Extract video data (handle different payload structures)
+		video_data = payload.get("data") or payload.get("video") or payload
+
+		# Get video URLs (try multiple fields)
+		vimeo_url = (
+			video_data.get("player_embed_url") or  # Preferred: player URL
+			video_data.get("link") or               # Alternative: direct link
+			video_data.get("url") or                # Alternative: url field
+			None
+		)
+
+		# Normalize Vimeo URL to player embed format
+		# Convert direct links (vimeo.com/123) to player links (player.vimeo.com/video/123)
+		if vimeo_url and "vimeo.com" in vimeo_url.lower() and "player.vimeo.com" not in vimeo_url.lower():
+			try:
+				import re
+				from urllib.parse import urlparse
+
+				parsed = urlparse(vimeo_url)
+				path = parsed.path.strip('/')
+
+				# Extract numeric video ID
+				video_id_match = re.match(r'(\d+)', path)
+				if video_id_match:
+					video_id = video_id_match.group(1)
+					normalized_url = f"https://player.vimeo.com/video/{video_id}"
+					frappe.logger().info(f"[Vimeo Webhook] Normalized URL: {vimeo_url} -> {normalized_url}")
+					vimeo_url = normalized_url
+			except Exception as e:
+				frappe.logger().warning(f"[Vimeo Webhook] Could not normalize URL: {str(e)}")
+
+		# Get video title (used to match with LMS Live Class)
+		video_title = (
+			video_data.get("name") or
+			video_data.get("title") or
+			""
+		)
+
+		# Get video description (may contain meeting info)
+		video_description = video_data.get("description", "")
+
+		# Get video duration
+		video_duration = video_data.get("duration", 0)
+
+		# Get created time
+		created_time = video_data.get("created_time", "")
+
+		frappe.logger().info(f"[Vimeo Webhook] Video uploaded: title='{video_title}', url={vimeo_url}, duration={video_duration}s")
+
+		if not vimeo_url:
+			frappe.logger().warning("[Vimeo Webhook] No video URL found in payload")
+			return {"status": "error", "message": "No video URL in payload"}
+
+		# Find matching LMS Live Class
+		live_class = _find_live_class_for_vimeo_video(video_title, video_description, created_time)
+
+		if not live_class:
+			frappe.logger().warning(f"[Vimeo Webhook] No matching LMS Live Class found for video: {video_title}")
+			# Don't return error - video might not be from LMS
+			return {"status": "success", "message": "No matching live class found (might not be LMS recording)"}
+
+		frappe.logger().info(f"[Vimeo Webhook] Found matching live class: {live_class.name}")
+
+		# Update live class with Vimeo URL
+		old_url = live_class.recording_url
+		live_class.recording_url = vimeo_url
+		live_class.recording_available = 1
+
+		# Mark source as Vimeo (if field exists)
+		if hasattr(live_class, 'recording_source'):
+			live_class.recording_source = "vimeo"
+
+		# Store video duration if available
+		if video_duration and hasattr(live_class, 'recording_duration'):
+			live_class.recording_duration = video_duration
+
+		live_class.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		frappe.logger().info(f"[Vimeo Webhook] Updated recording URL for {live_class.name}")
+		frappe.logger().info(f"[Vimeo Webhook] Old URL (Zoom): {old_url}")
+		frappe.logger().info(f"[Vimeo Webhook] New URL (Vimeo): {vimeo_url}")
+
+		# Create lesson from recording
+		try:
+			create_lesson_from_recording(live_class.name)
+			frappe.logger().info(f"[Vimeo Webhook] Created/updated lesson from recording for {live_class.name}")
+		except Exception as e:
+			frappe.logger().error(f"[Vimeo Webhook] Error creating lesson: {str(e)}")
+
+		return {
+			"status": "success",
+			"message": f"Recording updated with Vimeo URL for {live_class.name}",
+			"live_class": live_class.name,
+			"vimeo_url": vimeo_url
+		}
+
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo Webhook] Error handling upload complete: {str(e)}")
+		frappe.log_error(title="Vimeo Upload Complete Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+def _find_live_class_for_vimeo_video(video_title, video_description, created_time):
+	"""
+	Find LMS Live Class matching the Vimeo video.
+
+	Matching strategies:
+	1. By exact title match
+	2. By title contained in video title (fuzzy)
+	3. By meeting_id in description
+	4. By recent timing (uploaded within 24 hours of class)
+	"""
+	# Strategy 1: Exact title match
+	if video_title:
+		live_class = frappe.db.get_value(
+			"LMS Live Class",
+			{"title": video_title},
+			"name"
+		)
+		if live_class:
+			frappe.logger().info(f"[Vimeo Webhook] Matched by exact title: {video_title}")
+			return frappe.get_doc("LMS Live Class", live_class)
+
+	# Strategy 2: Fuzzy title match (video title contains class title or vice versa)
+	if video_title:
+		# Get recent live classes (prefer those without recordings yet)
+		recent_classes = frappe.get_all(
+			"LMS Live Class",
+			filters={
+				"date": [">=", frappe.utils.add_days(frappe.utils.nowdate(), -7)]  # Last 7 days
+			},
+			fields=["name", "title", "meeting_id", "date", "time", "recording_url"]
+		)
+
+		# Filter to prefer classes without Vimeo URLs already
+		# Vimeo URLs contain "vimeo.com" or "player.vimeo.com"
+		non_vimeo_classes = [
+			lc for lc in recent_classes
+			if not lc.recording_url or "vimeo.com" not in lc.recording_url.lower()
+		]
+
+		# Use filtered list if not empty, otherwise use all recent classes
+		classes_to_check = non_vimeo_classes if non_vimeo_classes else recent_classes
+
+		for lc in classes_to_check:
+			if lc.title and video_title:
+				# Check if titles match (case-insensitive, partial match)
+				if lc.title.lower() in video_title.lower() or video_title.lower() in lc.title.lower():
+					frappe.logger().info(f"[Vimeo Webhook] Fuzzy matched video '{video_title}' to class '{lc.title}'")
+					return frappe.get_doc("LMS Live Class", lc.name)
+
+	# Strategy 3: Match by meeting_id in description
+	if video_description:
+		# Extract meeting ID from description (Zoom meeting IDs are numeric)
+		import re
+		meeting_ids = re.findall(r'Meeting ID[:\s]+(\d+)', video_description, re.IGNORECASE)
+
+		for meeting_id in meeting_ids:
+			live_class = frappe.db.get_value(
+				"LMS Live Class",
+				{"meeting_id": meeting_id},
+				"name"
+			)
+			if live_class:
+				frappe.logger().info(f"[Vimeo Webhook] Matched by meeting_id in description: {meeting_id}")
+				return frappe.get_doc("LMS Live Class", live_class)
+
+	# Strategy 4: Match by timing (if created_time is within 24 hours of a live class)
+	if created_time and video_title:
+		try:
+			from dateutil import parser
+			video_created = parser.parse(created_time)
+
+			# Get classes from the day before video creation to the day after
+			date_range_start = (video_created - timedelta(days=1)).date()
+			date_range_end = (video_created + timedelta(days=1)).date()
+
+			recent_classes = frappe.get_all(
+				"LMS Live Class",
+				filters={
+					"date": ["between", [date_range_start, date_range_end]]
+				},
+				fields=["name", "title", "date", "time", "recording_url"],
+				order_by="date desc, time desc"
+			)
+
+			# Filter out classes that already have Vimeo URLs
+			non_vimeo_classes = [
+				lc for lc in recent_classes
+				if not lc.recording_url or "vimeo.com" not in lc.recording_url.lower()
+			]
+
+			# Return first matching class within time range (prefer without Vimeo URL)
+			classes_to_use = non_vimeo_classes if non_vimeo_classes else recent_classes
+			if classes_to_use and len(classes_to_use) == 1:
+				frappe.logger().info(f"[Vimeo Webhook] Matched by timing: only class in time window")
+				return frappe.get_doc("LMS Live Class", classes_to_use[0].name)
+
+		except Exception as e:
+			frappe.logger().warning(f"[Vimeo Webhook] Error parsing created_time: {str(e)}")
+
+	frappe.logger().warning(f"[Vimeo Webhook] No match found for video: {video_title}")
+	return None
 
 
 # ============================================================================

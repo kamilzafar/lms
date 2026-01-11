@@ -177,6 +177,11 @@ website_route_rules = [
 		"from_route": "/webhook/zoom",
 		"to_route": "api/method/lms.lms.api.zoom_webhook",
 	},
+	# Vimeo webhook route - for Vimeo Zoom app integration
+	{
+		"from_route": "/webhook/vimeo",
+		"to_route": "api/method/lms.lms.api.vimeo_webhook",
+	},
 ]
 
 website_redirects = [
