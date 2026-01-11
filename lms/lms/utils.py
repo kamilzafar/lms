@@ -1186,6 +1186,12 @@ def get_course_outline(course, progress=False):
 			["name", "title", "is_scorm_package", "launch_file", "scorm_package"],
 			as_dict=True,
 		)
+
+		# Skip if chapter doesn't exist (orphaned reference)
+		if not chapter_details:
+			frappe.logger().warning(f"Chapter Reference points to non-existent chapter: {chapter.chapter}")
+			continue
+
 		chapter_details["idx"] = chapter.idx
 		chapter_details.lessons = get_lessons(course, chapter_details, progress=progress)
 
@@ -1205,7 +1211,19 @@ def get_course_outline(course, progress=False):
 @rate_limit(limit=500, seconds=60 * 60)
 def get_lesson(course, chapter, lesson):
 	chapter_name = frappe.db.get_value("Chapter Reference", {"parent": course, "idx": chapter}, "chapter")
+
+	# Check if chapter reference exists
+	if not chapter_name:
+		frappe.logger().warning(f"Chapter not found for course {course}, chapter index {chapter}")
+		return {}
+
 	lesson_name = frappe.db.get_value("Lesson Reference", {"parent": chapter_name, "idx": lesson}, "lesson")
+
+	# Check if lesson reference exists
+	if not lesson_name:
+		frappe.logger().warning(f"Lesson not found in chapter {chapter_name}, lesson index {lesson}")
+		return {}
+
 	lesson_details = frappe.db.get_value(
 		"Course Lesson",
 		lesson_name,
@@ -1263,6 +1281,11 @@ def get_lesson(course, chapter, lesson):
 		],
 		as_dict=True,
 	)
+
+	# Check if lesson exists (second query)
+	if not lesson_details:
+		frappe.logger().warning(f"Lesson not found: {lesson_name} in course {course}")
+		return {}
 
 	if frappe.session.user == "Guest":
 		progress = 0
