@@ -3436,7 +3436,11 @@ def vimeo_webhook():
 		# Get request data
 		payload = None
 		if frappe.request.data:
-			payload = json.loads(frappe.request.data)
+			# frappe.request.data is bytes, need to decode
+			request_data = frappe.request.data
+			if isinstance(request_data, bytes):
+				request_data = request_data.decode('utf-8')
+			payload = json.loads(request_data)
 		elif frappe.form_dict:
 			payload = dict(frappe.form_dict)
 
@@ -3677,8 +3681,8 @@ def _find_live_class_for_vimeo_video(video_title, video_description, created_tim
 	# Strategy 4: Match by timing (if created_time is within 24 hours of a live class)
 	if created_time and video_title:
 		try:
-			from dateutil import parser
-			video_created = parser.parse(created_time)
+			# Parse ISO format datetime using frappe's built-in utility
+			video_created = get_datetime(created_time)
 
 			# Get classes from the day before video creation to the day after
 			date_range_start = (video_created - timedelta(days=1)).date()
