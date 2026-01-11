@@ -3450,8 +3450,45 @@ def vimeo_webhook():
 
 		frappe.logger().info(f"[Vimeo Webhook] Received payload: {json.dumps(payload, indent=2)}")
 
+		# Optional: Verify webhook signature for security
+		# Vimeo sends X-Webhook-Signature header for verification
+		signature = frappe.request.headers.get("X-Webhook-Signature")
+		if signature:
+			# Check if webhook secret is configured
+			webhook_secret = frappe.conf.get("vimeo_webhook_secret")
+			if webhook_secret:
+				try:
+					import hmac
+					import hashlib
+					# Compute expected signature
+					expected_signature = hmac.new(
+						webhook_secret.encode('utf-8'),
+						request_data.encode('utf-8') if isinstance(request_data, str) else request_data,
+						hashlib.sha256
+					).hexdigest()
+
+					if signature != expected_signature:
+						frappe.logger().error(f"[Vimeo Webhook] Signature verification failed")
+						frappe.logger().error(f"[Vimeo Webhook] Expected: {expected_signature}, Got: {signature}")
+						return {"status": "error", "message": "Invalid webhook signature"}
+
+					frappe.logger().info("[Vimeo Webhook] Signature verified successfully")
+				except Exception as e:
+					frappe.logger().error(f"[Vimeo Webhook] Error verifying signature: {str(e)}")
+					# Continue processing even if signature verification fails (for now)
+			else:
+				frappe.logger().warning("[Vimeo Webhook] Signature present but no vimeo_webhook_secret configured in site_config.json")
+		else:
+			frappe.logger().info("[Vimeo Webhook] No signature in request (webhook security not enabled)")
+
 		# Handle different Vimeo webhook formats
-		event_type = payload.get("event") or payload.get("type") or payload.get("action")
+		# Vimeo can send different field names for event type depending on configuration
+		event_type = (
+			payload.get("event") or
+			payload.get("type") or
+			payload.get("action") or
+			payload.get("webhook_type")  # Vimeo Zoom app uses this
+		)
 
 		frappe.logger().info(f"[Vimeo Webhook] Event type: {event_type}")
 
@@ -3460,7 +3497,14 @@ def vimeo_webhook():
 			return _handle_vimeo_verification(payload)
 
 		# Handle video upload complete events
-		if event_type in ["video.upload.complete", "video.upload.success", "upload.complete", "upload"]:
+		# Different Vimeo webhook configurations send different event names
+		if event_type in [
+			"video.upload.complete",
+			"video.upload.success",
+			"upload.complete",
+			"upload",
+			"video-created"  # Vimeo Zoom app sends this
+		]:
 			return _handle_vimeo_upload_complete(payload)
 
 		# Acknowledge other events
@@ -3521,6 +3565,25 @@ def _handle_vimeo_upload_complete(payload):
 			None
 		)
 
+		# If no full URL provided, try to extract from URI paths
+		# Vimeo Zoom app sends: {"data": {"clip_uri": "/videos/1153210218"}}
+		if not vimeo_url:
+			uri = video_data.get("clip_uri") or video_data.get("video_uri") or video_data.get("uri")
+			if uri:
+				frappe.logger().info(f"[Vimeo Webhook] Extracting video ID from URI: {uri}")
+				try:
+					import re
+					# Extract video ID from URI like "/videos/1153210218"
+					video_id_match = re.search(r'/videos/(\d+)', uri)
+					if video_id_match:
+						video_id = video_id_match.group(1)
+						vimeo_url = f"https://player.vimeo.com/video/{video_id}"
+						frappe.logger().info(f"[Vimeo Webhook] Constructed URL from URI: {uri} -> {vimeo_url}")
+					else:
+						frappe.logger().warning(f"[Vimeo Webhook] Could not extract video ID from URI: {uri}")
+				except Exception as e:
+					frappe.logger().error(f"[Vimeo Webhook] Error extracting video ID from URI: {str(e)}")
+
 		# Normalize Vimeo URL to player embed format
 		# Convert direct links (vimeo.com/123) to player links (player.vimeo.com/video/123)
 		if vimeo_url and "vimeo.com" in vimeo_url.lower() and "player.vimeo.com" not in vimeo_url.lower():
@@ -3555,9 +3618,29 @@ def _handle_vimeo_upload_complete(payload):
 		video_duration = video_data.get("duration", 0)
 
 		# Get created time
-		created_time = video_data.get("created_time", "")
+		# Vimeo Zoom app sends Unix timestamp at root level: {"timestamp": 1768072665}
+		# Other Vimeo webhooks send ISO format: {"created_time": "2026-01-11T10:30:00+00:00"}
+		created_time = None
+		unix_timestamp = payload.get("timestamp")
+		if unix_timestamp:
+			try:
+				# Convert Unix timestamp to datetime
+				from datetime import datetime
+				created_time = datetime.fromtimestamp(unix_timestamp)
+				frappe.logger().info(f"[Vimeo Webhook] Converted Unix timestamp {unix_timestamp} to {created_time}")
+			except Exception as e:
+				frappe.logger().warning(f"[Vimeo Webhook] Could not convert timestamp: {str(e)}")
 
-		frappe.logger().info(f"[Vimeo Webhook] Video uploaded: title='{video_title}', url={vimeo_url}, duration={video_duration}s")
+		# Fallback to ISO format in video data
+		if not created_time:
+			created_time_str = video_data.get("created_time", "")
+			if created_time_str:
+				try:
+					created_time = get_datetime(created_time_str)
+				except Exception as e:
+					frappe.logger().warning(f"[Vimeo Webhook] Could not parse created_time: {str(e)}")
+
+		frappe.logger().info(f"[Vimeo Webhook] Video uploaded: title='{video_title}', url={vimeo_url}, duration={video_duration}s, created={created_time}")
 
 		if not vimeo_url:
 			frappe.logger().warning("[Vimeo Webhook] No video URL found in payload")
