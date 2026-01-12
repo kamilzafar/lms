@@ -38,7 +38,7 @@ def _get_vimeo_access_token():
 	Get Vimeo access token from DocType or site_config.json (fallback).
 
 	Priority:
-	1. Read from enabled Vimeo Settings DocType
+	1. Read from enabled Vimeo Settings DocType (using get_password for decryption)
 	2. Fallback to site_config.json (backward compatible)
 
 	Returns:
@@ -46,16 +46,29 @@ def _get_vimeo_access_token():
 	"""
 	# Priority 1: Read from Vimeo Settings DocType
 	try:
-		vimeo_settings = frappe.get_all(
-			"Vimeo Settings",
-			filters={"enabled": 1},
-			fields=["access_token"],
-			limit=1
-		)
+		# Check if table exists (in case bench migrate hasn't been run)
+		if not frappe.db.table_exists("tabVimeo Settings"):
+			frappe.logger().info("[Vimeo] Vimeo Settings table doesn't exist yet. Run 'bench migrate' to create it.")
+		else:
+			# Get enabled Vimeo Settings records (get name only)
+			vimeo_settings = frappe.get_all(
+				"Vimeo Settings",
+				filters={"enabled": 1},
+				fields=["name"],
+				limit=1
+			)
 
-		if vimeo_settings and vimeo_settings[0].get("access_token"):
-			frappe.logger().info("[Vimeo] Using access token from Vimeo Settings DocType")
-			return vimeo_settings[0].access_token
+			if vimeo_settings:
+				# Load document and get decrypted password field
+				# Password fields return **** with get_all(), must use get_password()
+				doc = frappe.get_doc("Vimeo Settings", vimeo_settings[0].name)
+				token = doc.get_password("access_token")
+
+				if token:
+					frappe.logger().info("[Vimeo] Using access token from Vimeo Settings DocType")
+					return token
+				else:
+					frappe.logger().info("[Vimeo] Vimeo Settings exists but access_token is empty")
 	except Exception as e:
 		frappe.logger().warning(f"[Vimeo] Error reading from Vimeo Settings DocType: {str(e)}")
 
@@ -65,7 +78,7 @@ def _get_vimeo_access_token():
 		frappe.logger().info("[Vimeo] Using access token from site_config.json (legacy)")
 		return token
 
-	frappe.logger().warning("[Vimeo] No access token configured. Configure via /app/vimeo-settings or site_config.json")
+	frappe.logger().warning("[Vimeo] No access token configured. Configure via /app/lms-vimeo-settings or site_config.json")
 	return None
 
 
@@ -74,24 +87,37 @@ def _get_vimeo_webhook_secret():
 	Get Vimeo webhook secret from DocType or site_config.json (fallback).
 
 	Priority:
-	1. Read from enabled Vimeo Settings DocType
+	1. Read from enabled Vimeo Settings DocType (using get_password for decryption)
 	2. Fallback to site_config.json (backward compatible)
 
 	Returns:
-		str: Webhook secret or None
+		str: Webhook secret or None (webhook secret is optional)
 	"""
 	# Priority 1: Read from Vimeo Settings DocType
 	try:
-		vimeo_settings = frappe.get_all(
-			"Vimeo Settings",
-			filters={"enabled": 1},
-			fields=["webhook_secret"],
-			limit=1
-		)
+		# Check if table exists (in case bench migrate hasn't been run)
+		if not frappe.db.table_exists("tabVimeo Settings"):
+			frappe.logger().info("[Vimeo] Vimeo Settings table doesn't exist yet. Run 'bench migrate' to create it.")
+		else:
+			# Get enabled Vimeo Settings records (get name only)
+			vimeo_settings = frappe.get_all(
+				"Vimeo Settings",
+				filters={"enabled": 1},
+				fields=["name"],
+				limit=1
+			)
 
-		if vimeo_settings and vimeo_settings[0].get("webhook_secret"):
-			frappe.logger().info("[Vimeo] Using webhook secret from Vimeo Settings DocType")
-			return vimeo_settings[0].webhook_secret
+			if vimeo_settings:
+				# Load document and get decrypted password field
+				# Password fields return **** with get_all(), must use get_password()
+				doc = frappe.get_doc("Vimeo Settings", vimeo_settings[0].name)
+				secret = doc.get_password("webhook_secret")
+
+				if secret:
+					frappe.logger().info("[Vimeo] Using webhook secret from Vimeo Settings DocType")
+					return secret
+				else:
+					frappe.logger().info("[Vimeo] Vimeo Settings exists but webhook_secret is empty (optional)")
 	except Exception as e:
 		frappe.logger().warning(f"[Vimeo] Error reading webhook secret from DocType: {str(e)}")
 
@@ -3548,7 +3574,7 @@ def vimeo_webhook():
 					frappe.logger().error(f"[Vimeo Webhook] Error verifying signature: {str(e)}")
 					# Continue processing even if signature verification fails (for now)
 			else:
-				frappe.logger().warning("[Vimeo Webhook] Signature present but no webhook secret configured. Set at /app/vimeo-settings")
+				frappe.logger().warning("[Vimeo Webhook] Signature present but no webhook secret configured. Set at /app/lms-vimeo-settings")
 		else:
 			frappe.logger().info("[Vimeo Webhook] No signature in request (webhook security not enabled)")
 
@@ -3629,7 +3655,7 @@ def _fetch_vimeo_video_metadata(video_id):
 		vimeo_access_token = _get_vimeo_access_token()
 		if not vimeo_access_token:
 			frappe.logger().warning("[Vimeo API] No access token configured")
-			frappe.logger().warning("[Vimeo API] Configure at /app/vimeo-settings or add 'vimeo_access_token' to site_config.json")
+			frappe.logger().warning("[Vimeo API] Configure at /app/lms-vimeo-settings or add 'vimeo_access_token' to site_config.json")
 			return None
 
 		url = f"https://api.vimeo.com/videos/{video_id}"
