@@ -1,0 +1,23 @@
+{
+  "parameters": {
+    "method": "POST",
+    "url": "https://lms.ictpk.cloud/api/method/lms.lms.api.process_vimeo_recording",
+    "sendHeaders": true,
+    "headerParameters": {
+      "parameters": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({\n  video_url: 'https://player.vimeo.com/video/' + $('Get Title').item.json.videoId,\n  video_id: String($('Get Title').item.json.videoId),\n  created_time: $('Webhook').item.json.body.timestamp,\n  meeting_id: $json.message?.meeting_id || null,\n  title: $json.message?.title || '',\n  description: $json.message?.description || '',\n  duration: $('Get Title').item.json.vimeo?.duration || 0\n}) }}",
+    "options": {}
+  },
+  "name": "Send to LMS API",
+  "type": "n8n-nodes-base.httpRequest",
+  "typeVersion": 4.2,
+  "position": [1200, 300]
+}
