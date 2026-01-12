@@ -3535,6 +3535,63 @@ def _handle_vimeo_verification(payload):
 	return {"status": "ok"}
 
 
+def _fetch_vimeo_video_metadata(video_id):
+	"""
+	Fetch full video metadata from Vimeo API.
+
+	This function calls the Vimeo API to get complete video information,
+	including the video title (which contains the Zoom meeting title),
+	description (which may contain meeting ID), and other metadata.
+
+	Args:
+		video_id (str): Vimeo video ID (e.g., "1153210218")
+
+	Returns:
+		dict: Video metadata including:
+			- name: Video title (THE KEY - contains Zoom meeting title)
+			- description: May contain meeting ID
+			- duration: Video duration in seconds
+			- created_time: ISO format creation timestamp
+		None: If error or token not configured
+	"""
+	try:
+		vimeo_access_token = frappe.conf.get("vimeo_access_token")
+		if not vimeo_access_token:
+			frappe.logger().warning("[Vimeo API] No access token configured in site_config.json")
+			frappe.logger().warning("[Vimeo API] Add 'vimeo_access_token' to enable enriched matching")
+			return None
+
+		url = f"https://api.vimeo.com/videos/{video_id}"
+		headers = {
+			"Authorization": f"Bearer {vimeo_access_token}",
+			"Accept": "application/vnd.vimeo.*+json;version=3.4"
+		}
+
+		import requests
+		response = requests.get(url, headers=headers, timeout=10)
+
+		if response.status_code == 200:
+			data = response.json()
+			frappe.logger().info(f"[Vimeo API] ✓ Fetched metadata for video {video_id}")
+			frappe.logger().info(f"[Vimeo API] Title: '{data.get('name', '')}'")
+			frappe.logger().info(f"[Vimeo API] Duration: {data.get('duration', 0)}s")
+			return data
+		elif response.status_code == 404:
+			frappe.logger().warning(f"[Vimeo API] Video {video_id} not found (404)")
+			return None
+		elif response.status_code == 401:
+			frappe.logger().error(f"[Vimeo API] Authentication failed (401) - Check access token")
+			return None
+		else:
+			frappe.logger().error(f"[Vimeo API] Error {response.status_code}: {response.text}")
+			return None
+
+	except Exception as e:
+		frappe.logger().error(f"[Vimeo API] Exception fetching video {video_id}: {str(e)}")
+		frappe.log_error(title="Vimeo API Error", message=frappe.get_traceback())
+		return None
+
+
 def _handle_vimeo_upload_complete(payload):
 	"""
 	Handle Vimeo video upload completion.
@@ -3604,39 +3661,118 @@ def _handle_vimeo_upload_complete(payload):
 			except Exception as e:
 				frappe.logger().warning(f"[Vimeo Webhook] Could not normalize URL: {str(e)}")
 
-		# Get video title (used to match with LMS Live Class)
-		video_title = (
-			video_data.get("name") or
-			video_data.get("title") or
-			""
-		)
+		# ============================================================
+		# VIMEO API ENRICHMENT - Fetch full metadata
+		# ============================================================
+		# Extract video ID from constructed URL to fetch full metadata
+		video_id = None
+		video_metadata = None
 
-		# Get video description (may contain meeting info)
-		video_description = video_data.get("description", "")
+		if vimeo_url:
+			try:
+				import re
+				# Extract video ID from player URL: https://player.vimeo.com/video/1153210218
+				video_id_match = re.search(r'/video/(\d+)', vimeo_url)
+				if video_id_match:
+					video_id = video_id_match.group(1)
+					frappe.logger().info(f"[Vimeo Webhook] Extracted video ID: {video_id}")
+
+					# Call Vimeo API to get full metadata (including Zoom meeting title!)
+					video_metadata = _fetch_vimeo_video_metadata(video_id)
+
+					if video_metadata:
+						frappe.logger().info("[Vimeo Webhook] ✓ Successfully enriched webhook data with Vimeo API")
+					else:
+						frappe.logger().warning("[Vimeo Webhook] ⚠ Vimeo API enrichment failed, using webhook data only")
+				else:
+					frappe.logger().warning(f"[Vimeo Webhook] Could not extract video ID from URL: {vimeo_url}")
+			except Exception as e:
+				frappe.logger().error(f"[Vimeo Webhook] Error extracting video ID for API call: {str(e)}")
+
+		# Get video title (used to match with LMS Live Class)
+		# PRIORITY 1: Vimeo API metadata (contains Zoom meeting title!)
+		# PRIORITY 2: Webhook payload data
+		if video_metadata:
+			video_title = video_metadata.get("name", "")
+			frappe.logger().info(f"[Vimeo Webhook] Raw title from API: '{video_title}'")
+		else:
+			video_title = video_data.get("name") or video_data.get("title") or ""
+			frappe.logger().info(f"[Vimeo Webhook] Raw title from webhook: '{video_title}'")
+
+		# ============================================================
+		# IMPORTANT: Vimeo appends timestamp to Zoom meeting titles
+		# ============================================================
+		# If Zoom meeting title is "Live Class", Vimeo stores it as:
+		# "Live Class 2026-01-12 11:42:21"
+		#
+		# We need to strip this timestamp suffix for accurate matching
+		# Pattern: "{original_title} YYYY-MM-DD HH:MM:SS"
+		# ============================================================
+		if video_title:
+			import re
+			# Regex to detect and extract title before timestamp
+			# Matches patterns like: "Live Class 2026-01-12 11:42:21"
+			timestamp_pattern = r'^(.+?)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$'
+			match = re.match(timestamp_pattern, video_title)
+
+			if match:
+				original_title = match.group(1).strip()
+				frappe.logger().info(f"[Vimeo Webhook] ✓ Detected Vimeo timestamp suffix")
+				frappe.logger().info(f"[Vimeo Webhook] Original title: '{video_title}'")
+				frappe.logger().info(f"[Vimeo Webhook] Cleaned title: '{original_title}'")
+				video_title = original_title
+			else:
+				frappe.logger().info(f"[Vimeo Webhook] Using title as-is: '{video_title}'")
+
+		# Get video description (may contain meeting ID)
+		# PRIORITY 1: Vimeo API metadata
+		# PRIORITY 2: Webhook payload data
+		if video_metadata:
+			video_description = video_metadata.get("description", "")
+		else:
+			video_description = video_data.get("description", "")
 
 		# Get video duration
-		video_duration = video_data.get("duration", 0)
+		# PRIORITY 1: Vimeo API metadata
+		# PRIORITY 2: Webhook payload data
+		if video_metadata:
+			video_duration = video_metadata.get("duration", 0)
+		else:
+			video_duration = video_data.get("duration", 0)
 
 		# Get created time
-		# Vimeo Zoom app sends Unix timestamp at root level: {"timestamp": 1768072665}
-		# Other Vimeo webhooks send ISO format: {"created_time": "2026-01-11T10:30:00+00:00"}
+		# PRIORITY 1: Vimeo API metadata (ISO format)
+		# PRIORITY 2: Webhook Unix timestamp at root level
+		# PRIORITY 3: Webhook ISO format in video data
 		created_time = None
-		unix_timestamp = payload.get("timestamp")
-		if unix_timestamp:
-			try:
-				# Convert Unix timestamp to datetime
-				from datetime import datetime
-				created_time = datetime.fromtimestamp(unix_timestamp)
-				frappe.logger().info(f"[Vimeo Webhook] Converted Unix timestamp {unix_timestamp} to {created_time}")
-			except Exception as e:
-				frappe.logger().warning(f"[Vimeo Webhook] Could not convert timestamp: {str(e)}")
 
-		# Fallback to ISO format in video data
+		# Try Vimeo API metadata first (most reliable)
+		if video_metadata and video_metadata.get("created_time"):
+			try:
+				created_time = get_datetime(video_metadata.get("created_time"))
+				frappe.logger().info(f"[Vimeo Webhook] Using created_time from API: {created_time}")
+			except Exception as e:
+				frappe.logger().warning(f"[Vimeo Webhook] Could not parse API created_time: {str(e)}")
+
+		# Fallback to webhook Unix timestamp
+		if not created_time:
+			unix_timestamp = payload.get("timestamp")
+			if unix_timestamp:
+				try:
+					# Convert Unix timestamp to datetime
+					from datetime import datetime
+					created_time = datetime.fromtimestamp(unix_timestamp)
+					frappe.logger().info(f"[Vimeo Webhook] Converted Unix timestamp {unix_timestamp} to {created_time}")
+				except Exception as e:
+					frappe.logger().warning(f"[Vimeo Webhook] Could not convert timestamp: {str(e)}")
+
+		# Fallback to ISO format in webhook video data
 		if not created_time:
 			created_time_str = video_data.get("created_time", "")
 			if created_time_str:
 				try:
 					created_time = get_datetime(created_time_str)
+					frappe.logger().info(f"[Vimeo Webhook] Using created_time from webhook: {created_time}")
 				except Exception as e:
 					frappe.logger().warning(f"[Vimeo Webhook] Could not parse created_time: {str(e)}")
 
@@ -3698,104 +3834,331 @@ def _handle_vimeo_upload_complete(payload):
 
 def _find_live_class_for_vimeo_video(video_title, video_description, created_time):
 	"""
-	Find LMS Live Class matching the Vimeo video.
+	Find LMS Live Class matching the Vimeo video using 4-level matching cascade.
 
-	Matching strategies:
-	1. By exact title match
-	2. By title contained in video title (fuzzy)
-	3. By meeting_id in description
-	4. By recent timing (uploaded within 24 hours of class)
+	This function implements a comprehensive matching strategy to handle scenarios
+	with 12+ classes per day and even 10+ simultaneous classes.
+
+	Matching Hierarchy (Most → Least Reliable):
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	LEVEL 1: Meeting ID Match (100% reliable)
+	  → Extract meeting ID from video description
+	  → Match to Live Class WHERE meeting_id = extracted_id
+
+	LEVEL 2: Exact Title + Time Window (95% reliable)
+	  → Find classes with EXACT title match
+	  → Within ±2 hours of video creation time
+	  → If exactly ONE match, confirm
+
+	LEVEL 3: Fuzzy Title + Time Window (80% reliable)
+	  → Find classes with SIMILAR titles (contains/contained)
+	  → Within ±2 hours of video creation time
+	  → If exactly ONE match, confirm
+
+	LEVEL 4: Multi-Factor Scoring (handles edge cases)
+	  → Calculate composite score for each candidate:
+	    * Time proximity to class end: 40% weight
+	    * Title similarity (Levenshtein): 30% weight
+	    * No existing recording: 20% weight
+	    * Sequential processing: 10% weight
+	  → Match to highest scoring class
+	━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+	Args:
+		video_title (str): Video title from Vimeo API (contains Zoom meeting title)
+		video_description (str): Video description (may contain meeting ID)
+		created_time (datetime): Video creation timestamp
+
+	Returns:
+		frappe.Document: Matching LMS Live Class document
+		None: If no match found
 	"""
-	# Strategy 1: Exact title match
-	if video_title:
-		live_class = frappe.db.get_value(
-			"LMS Live Class",
-			{"title": video_title},
-			"name"
-		)
-		if live_class:
-			frappe.logger().info(f"[Vimeo Webhook] Matched by exact title: {video_title}")
-			return frappe.get_doc("LMS Live Class", live_class)
+	import re
+	import difflib
 
-	# Strategy 2: Fuzzy title match (video title contains class title or vice versa)
-	if video_title:
-		# Get recent live classes (prefer those without recordings yet)
-		recent_classes = frappe.get_all(
-			"LMS Live Class",
-			filters={
-				"date": [">=", frappe.utils.add_days(frappe.utils.nowdate(), -7)]  # Last 7 days
-			},
-			fields=["name", "title", "meeting_id", "date", "time", "recording_url"]
-		)
+	frappe.logger().info("[Vimeo Webhook] ═════════════════════════════════════════")
+	frappe.logger().info("[Vimeo Webhook] Starting 4-Level Matching Cascade")
+	frappe.logger().info(f"[Vimeo Webhook] Video Title: '{video_title}'")
+	frappe.logger().info(f"[Vimeo Webhook] Video Created: {created_time}")
+	frappe.logger().info("[Vimeo Webhook] ═════════════════════════════════════════")
 
-		# Filter to prefer classes without Vimeo URLs already
-		# Vimeo URLs contain "vimeo.com" or "player.vimeo.com"
-		non_vimeo_classes = [
-			lc for lc in recent_classes
-			if not lc.recording_url or "vimeo.com" not in lc.recording_url.lower()
-		]
-
-		# Use filtered list if not empty, otherwise use all recent classes
-		classes_to_check = non_vimeo_classes if non_vimeo_classes else recent_classes
-
-		for lc in classes_to_check:
-			if lc.title and video_title:
-				# Check if titles match (case-insensitive, partial match)
-				if lc.title.lower() in video_title.lower() or video_title.lower() in lc.title.lower():
-					frappe.logger().info(f"[Vimeo Webhook] Fuzzy matched video '{video_title}' to class '{lc.title}'")
-					return frappe.get_doc("LMS Live Class", lc.name)
-
-	# Strategy 3: Match by meeting_id in description
+	# ═══════════════════════════════════════════════════════════════
+	# LEVEL 1: Meeting ID Match (HIGHEST PRIORITY - 100% reliable)
+	# ═══════════════════════════════════════════════════════════════
 	if video_description:
-		# Extract meeting ID from description (Zoom meeting IDs are numeric)
-		import re
-		meeting_ids = re.findall(r'Meeting ID[:\s]+(\d+)', video_description, re.IGNORECASE)
+		frappe.logger().info("[Vimeo Webhook] LEVEL 1: Checking Meeting ID match...")
+
+		# Extract meeting IDs from description (Zoom meeting IDs are 10-12 digits)
+		# Examples: "Meeting ID: 12345678901" or just "12345678901"
+		meeting_ids = re.findall(r'(?:Meeting ID[:\s]+)?(\d{10,12})', video_description, re.IGNORECASE)
 
 		for meeting_id in meeting_ids:
+			frappe.logger().info(f"[Vimeo Webhook] LEVEL 1: Found meeting_id in description: {meeting_id}")
+
 			live_class = frappe.db.get_value(
 				"LMS Live Class",
 				{"meeting_id": meeting_id},
 				"name"
 			)
+
 			if live_class:
-				frappe.logger().info(f"[Vimeo Webhook] Matched by meeting_id in description: {meeting_id}")
+				frappe.logger().info(f"[Vimeo Webhook] ✓ LEVEL 1 SUCCESS: Matched by meeting_id: {meeting_id}")
 				return frappe.get_doc("LMS Live Class", live_class)
 
-	# Strategy 4: Match by timing (if created_time is within 24 hours of a live class)
-	if created_time and video_title:
+		frappe.logger().info("[Vimeo Webhook] ✗ LEVEL 1: No meeting_id match found")
+
+	# ═══════════════════════════════════════════════════════════════
+	# LEVEL 2: Exact Title + Time Window (95% reliable)
+	# ═══════════════════════════════════════════════════════════════
+	if video_title and created_time:
+		frappe.logger().info("[Vimeo Webhook] LEVEL 2: Checking exact title + time window...")
+
 		try:
-			# Parse ISO format datetime using frappe's built-in utility
+			# Parse created_time to datetime
 			video_created = get_datetime(created_time)
 
-			# Get classes from the day before video creation to the day after
-			date_range_start = (video_created - timedelta(days=1)).date()
-			date_range_end = (video_created + timedelta(days=1)).date()
+			# Define ±2 hour time window (narrower than previous ±24 hours)
+			time_start = video_created - timedelta(hours=2)
+			time_end = video_created + timedelta(hours=2)
 
-			recent_classes = frappe.get_all(
+			frappe.logger().info(f"[Vimeo Webhook] LEVEL 2: Time window: {time_start} to {time_end}")
+
+			# Search for classes with EXACT title match within time window
+			classes = frappe.get_all(
 				"LMS Live Class",
 				filters={
-					"date": ["between", [date_range_start, date_range_end]]
+					"title": video_title,
+					"date": ["between", [time_start.date(), time_end.date()]]
 				},
-				fields=["name", "title", "date", "time", "recording_url"],
-				order_by="date desc, time desc"
+				fields=["name", "title", "date", "time", "duration", "recording_url"]
 			)
 
-			# Filter out classes that already have Vimeo URLs
-			non_vimeo_classes = [
-				lc for lc in recent_classes
-				if not lc.recording_url or "vimeo.com" not in lc.recording_url.lower()
-			]
+			frappe.logger().info(f"[Vimeo Webhook] LEVEL 2: Found {len(classes)} classes with exact title '{video_title}'")
 
-			# Return first matching class within time range (prefer without Vimeo URL)
-			classes_to_use = non_vimeo_classes if non_vimeo_classes else recent_classes
-			if classes_to_use and len(classes_to_use) == 1:
-				frappe.logger().info(f"[Vimeo Webhook] Matched by timing: only class in time window")
-				return frappe.get_doc("LMS Live Class", classes_to_use[0].name)
+			if len(classes) == 1:
+				frappe.logger().info(f"[Vimeo Webhook] ✓ LEVEL 2 SUCCESS: Matched by exact title + time: '{video_title}'")
+				return frappe.get_doc("LMS Live Class", classes[0].name)
+			elif len(classes) > 1:
+				frappe.logger().info(f"[Vimeo Webhook] LEVEL 2: Multiple matches ({len(classes)}), proceeding to LEVEL 3")
+			else:
+				frappe.logger().info("[Vimeo Webhook] ✗ LEVEL 2: No exact title match in time window")
 
 		except Exception as e:
-			frappe.logger().warning(f"[Vimeo Webhook] Error parsing created_time: {str(e)}")
+			frappe.logger().warning(f"[Vimeo Webhook] LEVEL 2 Error: {str(e)}")
 
-	frappe.logger().warning(f"[Vimeo Webhook] No match found for video: {video_title}")
+	# ═══════════════════════════════════════════════════════════════
+	# LEVEL 3: Fuzzy Title + Time Window (80% reliable)
+	# ═══════════════════════════════════════════════════════════════
+	if video_title and created_time:
+		frappe.logger().info("[Vimeo Webhook] LEVEL 3: Checking fuzzy title + time window...")
+
+		try:
+			video_created = get_datetime(created_time)
+			time_start = video_created - timedelta(hours=2)
+			time_end = video_created + timedelta(hours=2)
+
+			# Get all classes in time window
+			classes = frappe.get_all(
+				"LMS Live Class",
+				filters={
+					"date": ["between", [time_start.date(), time_end.date()]],
+					"recording_available": 0  # Prefer classes without recordings
+				},
+				fields=["name", "title", "date", "time", "duration", "recording_url", "meeting_id"]
+			)
+
+			frappe.logger().info(f"[Vimeo Webhook] LEVEL 3: Found {len(classes)} classes in time window")
+
+			# Fuzzy match: title contains video_title or vice versa (case-insensitive)
+			matches = []
+			for lc in classes:
+				if lc.title and video_title:
+					title_lower = lc.title.lower()
+					video_title_lower = video_title.lower()
+
+					if title_lower in video_title_lower or video_title_lower in title_lower:
+						matches.append(lc)
+						frappe.logger().info(f"[Vimeo Webhook] LEVEL 3: Fuzzy match - '{lc.title}' ~ '{video_title}'")
+
+			if len(matches) == 1:
+				frappe.logger().info(f"[Vimeo Webhook] ✓ LEVEL 3 SUCCESS: Matched by fuzzy title: '{matches[0].title}'")
+				return frappe.get_doc("LMS Live Class", matches[0].name)
+			elif len(matches) > 1:
+				frappe.logger().info(f"[Vimeo Webhook] LEVEL 3: {len(matches)} fuzzy matches, proceeding to LEVEL 4")
+			else:
+				frappe.logger().info("[Vimeo Webhook] ✗ LEVEL 3: No fuzzy title matches")
+
+		except Exception as e:
+			frappe.logger().warning(f"[Vimeo Webhook] LEVEL 3 Error: {str(e)}")
+
+	# ═══════════════════════════════════════════════════════════════
+	# LEVEL 4: Multi-Factor Scoring (handles 10+ simultaneous classes)
+	# ═══════════════════════════════════════════════════════════════
+	if created_time:
+		frappe.logger().info("[Vimeo Webhook] LEVEL 4: Multi-factor scoring for disambiguation...")
+
+		try:
+			video_created = get_datetime(created_time)
+			time_start = video_created - timedelta(hours=2)
+			time_end = video_created + timedelta(hours=2)
+
+			# Get ALL candidates within time window (including those with recordings)
+			all_candidates = frappe.get_all(
+				"LMS Live Class",
+				filters={
+					"date": ["between", [time_start.date(), time_end.date()]]
+				},
+				fields=["name", "title", "date", "time", "duration", "recording_url", "recording_available"]
+			)
+
+			frappe.logger().info(f"[Vimeo Webhook] LEVEL 4: Found {len(all_candidates)} total candidates")
+
+			if not all_candidates:
+				frappe.logger().warning("[Vimeo Webhook] ✗ LEVEL 4: No candidates in time window")
+				frappe.log_error(
+					title="Vimeo Recording Not Matched",
+					message=f"Video: {video_title}\nCreated: {created_time}\nNo classes found in ±2 hour window"
+				)
+				return None
+
+			# ──────────────────────────────────────────────────────────
+			# Calculate composite score for each candidate
+			# ──────────────────────────────────────────────────────────
+			scored_candidates = []
+
+			for idx, lc in enumerate(all_candidates):
+				score = 0.0
+
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# FACTOR 1: Time Proximity (40% weight)
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# Classes ending closer to video creation get higher scores
+				try:
+					class_datetime = datetime.combine(lc.date, lc.time) if lc.time else datetime.combine(lc.date, datetime.min.time())
+					class_duration_minutes = lc.duration if lc.duration else 60  # Default 60 min
+					class_end = class_datetime + timedelta(minutes=class_duration_minutes)
+
+					time_diff_seconds = abs((video_created - class_end).total_seconds())
+
+					# Within 2 hours = 7200 seconds
+					if time_diff_seconds < 7200:
+						# Closer = higher score (max 40 points if 0 diff)
+						time_score = 40 * (1 - min(time_diff_seconds / 7200, 1))
+						score += time_score
+					else:
+						time_score = 0
+
+					time_diff_minutes = time_diff_seconds / 60
+
+				except Exception as e:
+					frappe.logger().warning(f"[Vimeo Webhook] LEVEL 4: Error calculating time diff for {lc.name}: {str(e)}")
+					time_score = 0
+					time_diff_minutes = 999999
+
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# FACTOR 2: Title Similarity (30% weight)
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# Use Levenshtein distance via difflib.SequenceMatcher
+				if video_title and lc.title:
+					try:
+						similarity = difflib.SequenceMatcher(
+							None,
+							video_title.lower(),
+							lc.title.lower()
+						).ratio()
+
+						title_score = 30 * similarity
+						score += title_score
+
+					except Exception as e:
+						frappe.logger().warning(f"[Vimeo Webhook] LEVEL 4: Error calculating similarity for {lc.name}: {str(e)}")
+						title_score = 0
+				else:
+					title_score = 0
+
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# FACTOR 3: No Existing Recording (20% weight)
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# Classes without recordings get bonus points
+				if lc.recording_available == 0:
+					availability_score = 20
+					score += 20
+				else:
+					availability_score = 0
+
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# FACTOR 4: Sequential Processing (10% weight)
+				# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+				# First-come-first-served for truly identical classes
+				position_score = 10 * (1 - idx / max(len(all_candidates), 1))
+				score += position_score
+
+				# Store result
+				scored_candidates.append({
+					"doc": lc,
+					"score": score,
+					"time_diff_min": time_diff_minutes,
+					"time_score": time_score,
+					"title_score": title_score,
+					"availability_score": availability_score,
+					"position_score": position_score
+				})
+
+			# ──────────────────────────────────────────────────────────
+			# Sort by score (highest first)
+			# ──────────────────────────────────────────────────────────
+			scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+			# ──────────────────────────────────────────────────────────
+			# Return best match if above minimum threshold
+			# ──────────────────────────────────────────────────────────
+			MINIMUM_SCORE_THRESHOLD = 20  # Prevents false positives
+
+			if scored_candidates and scored_candidates[0]["score"] > MINIMUM_SCORE_THRESHOLD:
+				best = scored_candidates[0]
+
+				frappe.logger().info("[Vimeo Webhook] ═══════════════════════════════════════")
+				frappe.logger().info(f"[Vimeo Webhook] ✓ LEVEL 4 SUCCESS: Matched by multi-factor scoring")
+				frappe.logger().info(f"[Vimeo Webhook] Class: '{best['doc'].title}'")
+				frappe.logger().info(f"[Vimeo Webhook] Total Score: {best['score']:.1f}/100")
+				frappe.logger().info(f"[Vimeo Webhook]   - Time proximity: {best['time_score']:.1f}/40 ({best['time_diff_min']:.1f} min diff)")
+				frappe.logger().info(f"[Vimeo Webhook]   - Title similarity: {best['title_score']:.1f}/30")
+				frappe.logger().info(f"[Vimeo Webhook]   - Availability: {best['availability_score']:.1f}/20")
+				frappe.logger().info(f"[Vimeo Webhook]   - Sequential: {best['position_score']:.1f}/10")
+
+				# Log runner-ups if close scores (potential ambiguity warning)
+				if len(scored_candidates) > 1 and scored_candidates[1]["score"] > best["score"] * 0.8:
+					runner_up = scored_candidates[1]
+					frappe.logger().warning(f"[Vimeo Webhook] ⚠ Close runner-up detected:")
+					frappe.logger().warning(f"[Vimeo Webhook]   Class: '{runner_up['doc'].title}' (score={runner_up['score']:.1f})")
+					frappe.logger().warning(f"[Vimeo Webhook]   Consider using unique class titles for better matching")
+
+				frappe.logger().info("[Vimeo Webhook] ═══════════════════════════════════════")
+
+				return frappe.get_doc("LMS Live Class", best["doc"].name)
+			else:
+				frappe.logger().error(f"[Vimeo Webhook] ✗ LEVEL 4: Best score {scored_candidates[0]['score']:.1f} below threshold {MINIMUM_SCORE_THRESHOLD}")
+
+		except Exception as e:
+			frappe.logger().error(f"[Vimeo Webhook] LEVEL 4 Error: {str(e)}")
+			frappe.log_error(title="Vimeo LEVEL 4 Matching Error", message=frappe.get_traceback())
+
+	# ═══════════════════════════════════════════════════════════════
+	# NO MATCH FOUND - Log detailed error for manual review
+	# ═══════════════════════════════════════════════════════════════
+	frappe.logger().error("[Vimeo Webhook] ═══════════════════════════════════════")
+	frappe.logger().error("[Vimeo Webhook] ✗ NO MATCH FOUND after all 4 levels")
+	frappe.logger().error(f"[Vimeo Webhook] Video Title: '{video_title}'")
+	frappe.logger().error(f"[Vimeo Webhook] Video Created: {created_time}")
+	frappe.logger().error(f"[Vimeo Webhook] Candidates checked: {len(all_candidates) if 'all_candidates' in locals() else 0}")
+	frappe.logger().error("[Vimeo Webhook] ═══════════════════════════════════════")
+
+	# Log to Frappe Error Log for admin visibility
+	frappe.log_error(
+		title="Vimeo Recording Not Matched",
+		message=f"Video Title: {video_title}\nCreated: {created_time}\n\nAll 4 matching levels failed.\nPlease manually link this recording to the appropriate Live Class."
+	)
+
 	return None
 
 

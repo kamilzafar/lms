@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(docker logs:*)",
+      "WebSearch",
+      "WebFetch(domain:developer.vimeo.com)",
+      "WebFetch(domain:vimeo.zendesk.com)",
+      "WebFetch(domain:help.vimeo.com)",
+      "WebFetch(domain:marketplace.zoom.us)",
+      "WebFetch(domain:nocodeapi.com)"
     ]
   }
 }
